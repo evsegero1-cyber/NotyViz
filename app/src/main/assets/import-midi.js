@@ -1,5 +1,5 @@
 // Импорт MIDI (.mid/.midi) через @tonejs/midi → модель v2
-import { PPQ, kindFromProgram, programName, buildMeasures, assignChannels, assignFrets, STD_TUNING, isStringKind } from './model.js';
+import { PPQ, handFromName, kindFromProgram, programName, buildMeasures, assignChannels, assignFrets, STD_TUNING, isStringKind } from './model.js';
 
 // Названия в MIDI часто в UTF-8 или Windows-1251, а парсер отдаёт их побайтно
 const fixText = s => {
@@ -30,7 +30,7 @@ export function importMidi(MidiClass, bytes, fileName) {
     const name = fixText(tr.name).trim() || programName(program, kind);
     const t = { name, instrument: programName(program, kind), kind, program, notes };
     if (isStringKind(kind)) { t.tuning = kind === 'bass' ? STD_TUNING.bass : STD_TUNING.guitar; t.fretsGuessed = true; assignFrets(notes, t.tuning, 24); }
-    if (/left|левая|\blh\b/i.test(name)) t.hand = 'L'; else if (/right|правая|\brh\b/i.test(name)) t.hand = 'R';
+    const hd = handFromName(name); if (hd) t.hand = hd;
     tracks.push(t);
   }
   if (!tracks.length) throw new Error('В MIDI-файле нет нот');

@@ -232,3 +232,80 @@ export class GuitarView {
     g.textAlign = 'left';
   }
 }
+
+// ---------- Ударные: дорожки по инструментам установки ----------
+export const DRUM_GROUPS = [
+  { id: 'crash', name: 'Крэш', col: '#ff8a3d', notes: [49, 57, 55, 52] },
+  { id: 'hh', name: 'Хай-хэт', col: '#ffd23f', notes: [42, 44, 46, 26] },
+  { id: 'snare', name: 'Малый', col: '#ff5c5c', notes: [37, 38, 39, 40] },
+  { id: 'kick', name: 'Бочка', col: '#e9ecf2', notes: [35, 36], foot: true },
+  { id: 'tom1', name: 'Том 1', col: '#4c9aff', notes: [48, 50] },
+  { id: 'tom2', name: 'Том 2', col: '#3ccf8e', notes: [45, 47] },
+  { id: 'floor', name: 'Напольный', col: '#c77dff', notes: [41, 43] },
+  { id: 'ride', name: 'Райд', col: '#4dd0e1', notes: [51, 53, 59] },
+  { id: 'perc', name: 'Перкуссия', col: '#a3a19a', notes: [] }
+];
+export const drumGroup = m => DRUM_GROUPS.find(g => g.notes.includes(m)) || DRUM_GROUPS[DRUM_GROUPS.length - 1];
+export const DRUM_NAMES = {
+  35: 'Бочка 2', 36: 'Бочка', 37: 'Римшот (боковой)', 38: 'Малый', 39: 'Хлопок', 40: 'Малый (электро)', 41: 'Напольный низкий', 42: 'Хай-хэт закрытый',
+  43: 'Напольный высокий', 44: 'Хай-хэт педалью', 45: 'Том низкий', 46: 'Хай-хэт открытый', 47: 'Том средний', 48: 'Том высокий', 49: 'Крэш',
+  50: 'Том очень высокий', 51: 'Райд', 52: 'Чайна', 53: 'Купол райда', 55: 'Сплэш', 57: 'Крэш 2', 59: 'Райд 2'
+};
+
+export class DrumView {
+  setNotes(notes) {
+    const used = new Set(notes.map(n => drumGroup(n.m).id));
+    this.lanes = DRUM_GROUPS.filter(g => used.has(g.id));
+    if (!this.lanes.length) this.lanes = DRUM_GROUPS.slice(0, 4);
+    this.laneIdx = new Map(this.lanes.map((g, i) => [g.id, i]));
+  }
+  hit(x, y) {
+    if (!this.lanes || y < this.padTop) return null;
+    const i = Math.floor(x / (this.W / this.lanes.length));
+    const g = this.lanes[i]; if (!g) return null;
+    return g.notes[0] || 39;
+  }
+  draw(g, W, H, ctx) {
+    this.W = W;
+    const { t, notes, speed } = ctx;
+    const n = this.lanes.length, lw = W / n;
+    const padH = Math.max(64, Math.min(120, H * 0.18));
+    const padTop = H - padH; this.padTop = padTop;
+    g.fillStyle = '#0f1115'; g.fillRect(0, 0, W, H);
+    for (let i = 0; i < n; i++) { g.fillStyle = i % 2 ? '#12151b' : '#14181f'; g.fillRect(i * lw, 0, lw, padTop); }
+    const win = Math.max(1.2, Math.min(4, 3 * speed));
+    const pps = padTop / win;
+    const yOf = s => padTop - (s - t) * pps;
+    measureLines(g, ctx, 0, W, yOf, 0, padTop);
+    // доли такта тонкими линиями
+    const active = new Map();
+    let i = ctx.firstIdx(notes, t - 1);
+    const gemH = Math.max(8, Math.min(16, lw * 0.18));
+    for (; i < notes.length; i++) {
+      const q = notes[i]; if (q.s > t + win) break;
+      const grp = drumGroup(q.m), li = this.laneIdx.get(grp.id); if (li == null) continue;
+      const y = yOf(q.s);
+      const hitNow = q.s <= t && t - q.s < 0.12;
+      if (hitNow) active.set(grp.id, q.m);
+      if (q.s < t - 0.05) continue;
+      const x = li * lw;
+      g.globalAlpha = 1;
+      rr(g, x + lw * 0.12, y - gemH / 2, lw * 0.76, gemH, gemH / 2);
+      g.fillStyle = grp.col; g.fill();
+      if (q.m === 46) { g.strokeStyle = '#000'; g.lineWidth = 2; g.beginPath(); g.arc(x + lw / 2, y, gemH * 0.28, 0, 7); g.stroke(); }
+      if (q.m === 44) { g.fillStyle = '#000'; g.fillRect(x + lw * 0.3, y - 1, lw * 0.4, 2); }
+    }
+    // площадки
+    for (let k = 0; k < n; k++) {
+      const grp = this.lanes[k], x = k * lw, on = active.has(grp.id) || (ctx.pressed && ctx.pressed.has(grp.id));
+      rr(g, x + 4, padTop + 6, lw - 8, padH - 12, 12);
+      g.fillStyle = on ? grp.col : '#1b1f27'; g.fill();
+      g.strokeStyle = grp.col; g.lineWidth = 2; g.stroke();
+      g.fillStyle = on ? '#000' : '#e9ecf2'; g.font = `600 ${Math.max(11, Math.min(15, lw * 0.16))}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(grp.name, x + lw / 2, padTop + padH / 2 - (grp.foot ? 7 : 0));
+      if (grp.foot) { g.font = '11px system-ui'; g.fillStyle = on ? '#000' : '#8b93a3'; g.fillText('нога', x + lw / 2, padTop + padH / 2 + 10); }
+    }
+    g.fillStyle = 'rgba(255,255,255,.25)'; g.fillRect(0, padTop - 1, W, 2);
+    g.textAlign = 'left';
+  }
+}

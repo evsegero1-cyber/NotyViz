@@ -125,10 +125,11 @@ export class Engine {
       }
     });
   }
-  previewNote(midi, program = 0) {
+  previewNote(midi, program = 0, drum = false) {
     const M = this.at.midi; const mf = new M.MidiFile(); mf.division = PPQ;
     const h = new M.AlphaSynthMidiFileHandler(mf, true);
-    h.addTempo(0, 120); h.addProgramChange(0, 0, 0, program); h.addNote(0, 0, PPQ, midi, 100, 0); h.finishTrack(0, PPQ);
+    const ch = drum ? 9 : 0;
+    h.addTempo(0, 120); h.addProgramChange(0, 0, ch, drum ? 0 : program); h.addNote(0, 0, PPQ, midi, 100, ch); h.finishTrack(0, PPQ);
     try { this.player.playOneTimeMidiFile(mf); } catch (e) { }
   }
 }

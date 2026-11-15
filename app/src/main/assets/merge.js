@@ -78,6 +78,8 @@ function mapper(f, ref, o) {
   const method = o.method || 'bars';
   const refMs = ref.measures, last = refMs[refMs.length - 1];
   const rt = makeTime(ref), st = makeTime(s);
+  const uniq = ms => new Set(ms.map(m => m.n)).size === ms.length;
+  const byNum = uniq(refMs) && uniq(s.measures) ? new Map(refMs.map(m => [m.n, m])) : null;
   let dt = 0;
   const off = o.offset;
   if (off && off.v) dt = off.unit === 'ms' ? off.v / 1000 * rt.bpmAt(0) / 60 * PPQ : off.v * refMs[0].len;
@@ -88,7 +90,10 @@ function mapper(f, ref, o) {
     else {
       const i = measureIdx(s.measures, tick), m = s.measures[i];
       const frac = (tick - m.tick) / m.len;
-      if (i < refMs.length) r = refMs[i].tick + frac * refMs[i].len;
+      // если номера тактов в обоих файлах однозначны — сопоставляем по номеру такта
+      const rm = byNum && byNum.get(m.n);
+      if (rm) r = rm.tick + frac * rm.len;
+      else if (i < refMs.length) r = refMs[i].tick + frac * refMs[i].len;
       else r = last.tick + (i - refMs.length + 1 + frac) * last.len;
     }
     return r + dt;
@@ -96,7 +101,7 @@ function mapper(f, ref, o) {
 }
 
 // Сборка общей композиции
-export function mergeSongs(files, refIdx, title) {
+export function mergeSongs(files, refIdx, title, pianoName) {
   const ref = files[refIdx].song;
   const tracks = [];
   let total = ref.totalTicks, minT = 0;
@@ -105,10 +110,14 @@ export function mergeSongs(files, refIdx, title) {
     f.song.tracks.forEach((tr, ti) => {
       const sel = f.sel[ti]; if (!sel || !sel.on) return;
       const notes = [];
+      const oct = tr.kind === 'drums' ? 0 : (sel.oct || 0) * 12;
+      const hand = sel.hand && sel.hand !== 'auto' ? sel.hand : tr.hand;
       for (const n of tr.notes) {
         if (n.deleted) continue;
         const t0 = map(n.t), t1 = map(n.t + n.d);
-        const q = { ...n, t: Math.round(t0), d: Math.max(1, Math.round(t1 - t0)) };
+        const q = { ...n, t: Math.round(t0), d: Math.max(1, Math.round(t1 - t0)), m: n.m + oct };
+        if (hand && !q.h) q.h = hand;
+        if (oct && q.s != null) { delete q.s; delete q.f; }
         delete q.page; delete q.box;
         notes.push(q);
         if (q.t + q.d > total) total = q.t + q.d;
@@ -116,11 +125,25 @@ export function mergeSongs(files, refIdx, title) {
       }
       tracks.push({
         name: sel.name || tr.name, instrument: tr.instrument, kind: tr.kind, program: sel.program != null ? sel.program : tr.program,
-        tuning: tr.tuning || null, tuningNames: tr.tuningNames || null, hand: tr.hand, volume: 1, from: f.name, notes
+        tuning: oct ? null : tr.tuning || null, tuningNames: oct ? null : tr.tuningNames || null, hand, volume: 1, from: f.name, notes,
+        joinKey: sel.join ? 'piano' : null
       });
     });
   });
   if (!tracks.length) throw new Error('Не выбрано ни одной дорожки');
+  // Умное объединение фортепиано: партии рук → одна дорожка, у каждой ноты своя рука
+  const joined = tracks.filter(t => t.joinKey === 'piano');
+  if (joined.length >= 2) {
+    const R = joined.find(t => t.hand === 'R') || joined[0];
+    const pianoTrack = {
+      name: pianoName || 'Фортепиано', instrument: R.instrument, kind: 'piano', program: R.program, tuning: null, tuningNames: null, volume: 1,
+      from: [...new Set(joined.map(t => t.from))].join(' + '), notes: joined.flatMap(t => t.notes.map(n => { const q = { ...n }; delete q.s; delete q.f; if (!q.h && t.hand) q.h = t.hand; return q; }))
+    };
+    const at = tracks.indexOf(joined[0]);
+    for (const t of joined) tracks.splice(tracks.indexOf(t), 1);
+    tracks.splice(at, 0, pianoTrack);
+  }
+  for (const t of tracks) delete t.joinKey;
   // Если смещение увело ноты раньше начала — сдвигаем всё вместе, чтобы ничего не потерять
   const shift = minT < 0 ? Math.ceil(-minT / ref.measures[0].len) * ref.measures[0].len : 0;
   const measures = ref.measures.map(m => ({ ...m, sig: [...m.sig] }));
@@ -149,4 +172,25 @@ export function extendMeasures(song) {
     last = { n: last.n + 1, tick: last.tick + last.len, len: last.len, sig: [...last.sig] }; ms.push(last);
   }
   song.totalTicks = Math.max(song.totalTicks, last.tick + last.len);
+}
+
+// Партии фортепиано среди выбранных дорожек (для умного объединения)
+export function pianoParts(files) {
+  const out = [];
+  files.forEach((f, fi) => f.song.tracks.forEach((tr, ti) => {
+    const sel = f.sel[ti];
+    if (sel && sel.on && tr.kind === 'piano') out.push({ fi, ti, tr, sel, hand: sel.hand && sel.hand !== 'auto' ? sel.hand : tr.hand || null });
+  }));
+  return out;
+}
+const median = a => { if (!a.length) return 0; const b = [...a].sort((x, y) => x - y); return b[b.length >> 1]; };
+// Левая рука выше правой — почти наверняка ошибка октавы (например, неверно угадан строй в PDF)
+export function handOctaveCheck(parts) {
+  const L = parts.filter(p => p.hand === 'L'), R = parts.filter(p => p.hand === 'R');
+  if (!L.length || !R.length) return null;
+  const pitch = p => p.tr.notes.filter(n => !n.deleted).map(n => n.m + 12 * (p.sel.oct || 0));
+  const mL = median(L.flatMap(pitch)), mR = median(R.flatMap(pitch));
+  if (mL >= mR) return { shift: -Math.ceil((mL - mR + 6) / 12), L, mL, mR };
+  if (mR - mL > 36) return { shift: 1, L, mL, mR, far: true };
+  return null;
 }

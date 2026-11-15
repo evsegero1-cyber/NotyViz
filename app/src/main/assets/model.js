@@ -42,6 +42,14 @@ export function kindFromInstrumentText(s) {
   return { kind: 'piano', program: 0 };
 }
 
+// Рука по названию дорожки: «Piano (LH)», «Left Hand», «левая рука», «Л.Р.»…
+export function handFromName(s) {
+  s = s || '';
+  if (/\bLH\b|\bleft\b|\bl\.?\s?h\.|левая|левой|\bл\.?\s?р\.?/i.test(s)) return 'L';
+  if (/\bRH\b|\bright\b|\br\.?\s?h\.|правая|правой|\bп\.?\s?р\.?/i.test(s)) return 'R';
+  return null;
+}
+
 // ---------- Время ----------
 export function makeTime(song) {
   const tempos = (song.tempos && song.tempos.length ? song.tempos : [{ tick: 0, bpm: 120 }]).slice().sort((a, b) => a.tick - b.tick);
@@ -156,12 +164,13 @@ export function fromBeatSong(old) {
   const tempos = []; let last = null;
   for (const m of old.measures) { const bpm = m.tempo || 120; if (bpm !== last) { tempos.push({ tick: B(m.start), bpm }); last = bpm; } }
   const inst = kindFromInstrumentText(old.instrument || old.track);
-  const notes = old.notes.map(n => ({ t: B(n.start), d: Math.max(1, B(n.dur)), m: n.midi, v: 96, s: n.string, f: n.fret, bar: n.measure, page: n.page, box: n.box, voice: n.voice }));
+  const drum = old.isDrum || inst.kind === 'drums';
+  const notes = old.notes.map(n => ({ t: B(n.start), d: Math.max(1, B(n.dur)), m: n.midi, v: 96, s: drum ? undefined : n.string, f: drum ? undefined : n.fret, bar: n.measure, page: n.page, box: n.box, voice: n.voice }));
   const track = {
-    name: old.track || old.instrument || 'Дорожка', instrument: old.instrument || '', kind: old.isBass ? 'bass' : inst.kind, program: inst.program,
-    tuning: old.tuning, tuningNames: old.tuningNames, notes
+    name: old.track || old.instrument || 'Дорожка', instrument: old.instrument || '', kind: drum ? 'drums' : old.isBass && inst.kind !== 'piano' ? 'bass' : inst.kind, program: drum ? 0 : inst.program,
+    tuning: drum ? null : old.tuning, tuningNames: drum ? null : old.tuningNames, notes
   };
-  if (/left|левая/i.test(track.name)) track.hand = 'L'; else if (/right|правая/i.test(track.name)) track.hand = 'R';
+  const hd = handFromName(track.name + ' ' + track.instrument); if (hd) track.hand = hd;
   const song = { v: 2, id: old.id, title: old.title, source: 'pdf', tempos, measures, totalTicks: B(old.totalBeats), tracks: [track] };
   assignChannels(song.tracks);
   return song;

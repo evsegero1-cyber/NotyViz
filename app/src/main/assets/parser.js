@@ -108,6 +108,14 @@ function extractGlyphs(out) {
     const bits = [];
     for (let r = 0; r < GH; r++) for (let q = 0; q < GW; q++)
       bits.push(inside(g.b.x0 + (q + .5) / GW * w, g.b.y0 + (r + .5) / GH * h, polys) ? 1 : 0);
+    // Ноты ударных: залитая овальная головка, крестик, крестик в кружке
+    const t0 = g.subs[0].t.join(''), ar = w / h;
+    const nC = (t0.match(/C/g) || []).length, nL = (t0.match(/L/g) || []).length;
+    let head = null;
+    if (g.subs.length === 1 && nC >= 4 && nL === 0 && ar > 1.05 && ar < 1.7 && w > 4 && w < 11) head = 'head';
+    else if (g.subs.length === 1 && nL >= 8 && nC === 0 && ar > 0.75 && ar < 1.35 && w > 4) head = w > 7.3 ? 'xbig' : 'x';
+    else if (nC >= 5 && ar > 0.85 && ar < 1.18 && w > 7 && w < 12) head = 'xcirc';
+    if (head) { g.label = head; g.head = true; g.w = w; g.h = h; g.cx = (g.b.x0 + g.b.x1) / 2; g.cy = (g.b.y0 + g.b.y1) / 2; continue; }
     let best = null, bd = 1e9;
     for (const t of TEMPLATES) {
       let d = 0; for (let i = 0; i < bits.length; i++) if (bits[i] !== +t.b[i]) d++;
@@ -158,7 +166,7 @@ async function parsePage(page, O, pageNo) {
   const tc = await page.getTextContent();
   const H = page.view[3];
   const texts = tc.items.filter(it => it.str && it.str.trim()).map(it => ({
-    s: it.str.trim(), x: it.transform[4], y: H - it.transform[5], h: it.height || Math.abs(it.transform[3])
+    s: it.str.trim(), x: it.transform[4], y: H - it.transform[5], h: it.height || Math.abs(it.transform[3]), w: it.width || 0, raw: it.str
   }));
 
   // Горизонтальные линии (струны) и вертикальные (тактовые черты, штили)
@@ -202,7 +210,7 @@ async function parsePage(page, O, pageNo) {
     const ys = sg.map(l => l.y), top = ys[0], bot = ys[ys.length - 1], sp = ys[1] - ys[0];
     const sx0 = Math.min(...sg.map(l => l.x0)), sx1 = Math.max(...sg.map(l => l.x1));
     // Тактовые черты
-    const bars = cluster(vl.filter(v => v.y0 <= top + 1 && v.y1 >= bot - 1 && v.x > sx0 - 2 && v.x < sx1 + 2).map(v => v.x), 4);
+    const bars = cluster(vl.filter(v => v.y0 <= top + 1 && v.y1 >= bot - 1 && v.y0 >= top - sp * 0.6 && v.y1 <= bot + sp * 0.6 && v.x > sx0 - 2 && v.x < sx1 + 2).map(v => v.x), 4);
     const bx = cluster([sx0, ...bars, sx1], 4);
     const measures = [];
     for (let i = 0; i + 1 < bx.length; i++) if (bx[i + 1] - bx[i] > 8) measures.push({ x0: bx[i], x1: bx[i + 1] });
@@ -234,7 +242,10 @@ async function parsePage(page, O, pageNo) {
       .sort((a, b) => a.y - b.y).map(t => t.s).slice(0, ys.length);
 
     // Цифры на струнах
-    const onStaff = glyphs.filter(g => g.cx > sx0 && g.cx < sx1 && g.cy > top - sp * 0.7 && g.cy < bot + sp * 0.7 && g.label !== 'flag');
+    const onStaff = glyphs.filter(g => !g.head && g.cx > sx0 && g.cx < sx1 && g.cy > top - sp * 0.7 && g.cy < bot + sp * 0.7 && g.label !== 'flag');
+    // головки ударных: позиция на нотоносце в полуинтервалах от нижней линии
+    const heads = glyphs.filter(g => g.head && g.cx > sx0 && g.cx < sx1 && g.cy > top - sp * 3.2 && g.cy < bot + sp * 2.2)
+      .map(g => ({ kind: g.label, step: Math.round((bot - g.cy) / (sp / 2)), cx: g.b.x0, x0: g.b.x0, x1: g.b.x1, b: { ...g.b }, gray: g.gray }));
     const strIdx = g => { let bi = 0, bd = 1e9; ys.forEach((y, i) => { const d = Math.abs(g.cy - y); if (d < bd) { bd = d; bi = i; } }); return bd < sp * 0.5 ? bi : -1; };
     const rows = new Map();
     for (const g of onStaff) { const si = strIdx(g); if (si < 0) continue; if (!rows.has(si)) rows.set(si, []); rows.get(si).push(g); }
@@ -269,9 +280,14 @@ async function parsePage(page, O, pageNo) {
       }
     }
     // Штили и балки ритма (под станом)
-    const stemsRaw = vl.filter(v => v.y0 > bot - 1.5 && v.y1 > bot + 4 && v.y0 < bot + 70 && v.y1 - v.y0 < 30 && v.x > sx0 && v.x < sx1);
+    const stemsRaw = vl.filter(v => v.x > sx0 && v.x < sx1 && v.y1 > bot + 4 && v.y1 < bot + 70 &&
+      ((v.y0 > bot - 1.5 && v.y1 - v.y0 < 30) || (heads.length && v.y0 < bot && v.y1 - v.y0 < 110)));
     const stems = [];
-    for (const v of stemsRaw) if (!stems.some(s => Math.abs(s.x - v.x) < 0.3 && Math.abs(s.y1 - v.y1) < 0.3 && Math.abs(s.y0 - v.y0) < 0.3)) stems.push({ ...v });
+    for (const v of stemsRaw.sort((a, b) => (b.y1 - b.y0) - (a.y1 - a.y0))) {
+      // одинаковые штили (заливка + обводка) и куски одного штиля у ударных
+      if (stems.some(s => Math.abs(s.x - v.x) < 0.3 && ((Math.abs(s.y1 - v.y1) < 0.3 && Math.abs(s.y0 - v.y0) < 0.3) || (heads.length && v.y0 >= s.y0 - 0.5 && v.y1 <= s.y1 + 0.5)))) continue;
+      stems.push({ ...v });
+    }
     const beams = [];
     for (const l of hl) if (l.rect && l.y > bot + 2 && l.y < bot + 70 && l.h > 0.5 && l.x1 - l.x0 > 2 &&
       !beams.some(b => Math.abs(b.x0 - l.x0) < 0.3 && Math.abs(b.x1 - l.x1) < 0.3 && Math.abs(b.y - l.y) < 0.3)) beams.push(l);
@@ -290,16 +306,30 @@ async function parsePage(page, O, pageNo) {
       const h = s.y1 - s.y0;
       const nb = beams.filter(b => b.x0 <= s.x + 0.6 && b.x1 >= s.x - 0.6 && b.y > s.y1 - full * 0.7 && b.y < s.y1 + 1).length;
       const nf = flags.filter(f => Math.abs(f.b.x0 - s.x) < 1.5 && f.cy > s.y0 - 3 && f.cy < s.y1 + 3).length;
-      let dur = h < Math.max(full * 0.7, sp * 1.1) ? 2 : 1;
+      let dur = (!heads.length && h < Math.max(full * 0.7, sp * 1.1)) ? 2 : 1;
       const k = Math.max(nb, nf);
       if (k) dur = 1 / Math.pow(2, k);
       if (dots.some(d => d.x0 > s.x + 0.3 && d.x0 < s.x + 5 && d.y1 > s.y1 - 4 && d.y0 < s.y1 + 2)) dur *= 1.5;
       voices[ri].push({ x: s.x, dur });
     }
     voices.forEach(v => v.sort((a, b) => a.x - b.x));
-    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, arcs, voices });
+    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, arcs, voices });
   }
   return { systems: res, texts };
+}
+
+// Склейка кусочков текста одной строки (pdf.js режет строку на части)
+function joinLine(items) {
+  const a = [...items].sort((p, q) => p.x - q.x);
+  let out = '', prevEnd = null;
+  for (const t of a) {
+    const txt = (t.raw != null ? t.raw : t.s).trim(); if (!txt) continue;
+    const gap = prevEnd == null ? 0 : t.x - prevEnd;
+    if (prevEnd != null && (gap > t.h * 0.12 || /^\s/.test(t.raw || ''))) out += ' ';
+    out += txt;
+    prevEnd = t.x + (t.w || txt.length * t.h * 0.5);
+  }
+  return out.replace(/\s+/g, ' ').trim();
 }
 
 export async function parseSongsterrPdf(pdfjsLib, data, onProgress) {
@@ -310,15 +340,19 @@ export async function parseSongsterrPdf(pdfjsLib, data, onProgress) {
     const page = await doc.getPage(p);
     const r = await parsePage(page, O, p);
     if (p === 1) {
-      const head = r.texts.filter(t => t.y < 90).sort((a, b) => a.y - b.y || a.x - b.x);
-      const big = head.filter(t => t.h > 14 && t.s !== '—');
-      title = big.map(t => t.s).join(' — ');
-      const tr = head.filter(t => t.h > 8 && t.h <= 14 && t.s !== '—');
-      const trk = tr.find(t => /^Track:/i.test(t.s));
-      if (trk) {
-        track = trk.s.replace(/^Track:\s*/i, '');
-        const rest = tr.filter(t => Math.abs(t.y - trk.y) < 1 && t.x > trk.x);
-        instrument = rest.map(t => t.s).join(' ');
+      const head = r.texts.filter(t => t.y < 90);
+      const big = head.filter(t => t.h > 14);
+      const y0 = big.length ? Math.min(...big.map(t => t.y)) : 0;
+      title = joinLine(big.filter(t => Math.abs(t.y - y0) < 4));
+      const trk0 = head.find(t => /Track:/i.test(t.s));
+      const tr = trk0 ? head.filter(t => Math.abs(t.y - trk0.y) < 2.5) : [];
+      const line = joinLine(tr);
+      const mt = /Track:\s*(.*)$/i.exec(line);
+      if (mt) {
+        const parts = mt[1].split(/\s+—\s+|^—\s*|\s*—$/);
+        track = (parts[0] || '').trim();
+        instrument = parts.slice(1).join(' ').trim();
+        if (!track && !instrument) track = mt[1].replace(/^—\s*/, '').trim();
       }
     }
     systems.push(...r.systems);
@@ -328,10 +362,40 @@ export async function parseSongsterrPdf(pdfjsLib, data, onProgress) {
   return buildSong(systems, { title, track, instrument });
 }
 
+// Ударные: позиция на нотоносце + вид головки → номер инструмента General MIDI
+const DRUM_MAP = {
+  head: { '-2': 35, '-1': 35, 0: 35, 1: 36, 2: 41, 3: 43, 4: 45, 5: 38, 6: 48, 7: 50, 8: 50, 9: 48 },
+  x: { '-2': 44, '-1': 44, 0: 44, 1: 44, 3: 42, 5: 37, 6: 42, 7: 53, 8: 51, 9: 42, 10: 49, 11: 57, 12: 55 },
+  xbig: { 7: 53, 8: 51, 9: 42, 10: 49, 11: 57, 12: 55, 13: 52 },
+  xcirc: { 8: 53, 9: 46, 10: 49, 11: 57 }
+};
+export function drumNote(kind, step) {
+  const m = DRUM_MAP[kind] || DRUM_MAP.head;
+  if (m[step] != null) return m[step];
+  return kind === 'head' ? 38 : kind === 'xcirc' ? 46 : 42;
+}
+
 export function buildSong(systems, meta) {
   const nStr = systems[0].ys.length;
-  const isBass = /bass|бас/i.test(meta.track + ' ' + meta.instrument) || nStr <= 5 && /bass/i.test(meta.instrument);
+  const drumWords = /drum|perc|удар|бараб/i.test((meta.instrument || '') + ' ' + (meta.track || ''));
+  const totalDigits = systems.reduce((a, s) => a + s.notes.length, 0), totalHeads = systems.reduce((a, s) => a + (s.heads || []).length, 0);
+  const isDrum = (drumWords && totalHeads > 0) || (totalDigits === 0 && totalHeads > 0);
+  if (isDrum) for (const sy of systems) {
+    sy.notes = (sy.heads || []).map(h => ({ si: -1, drum: drumNote(h.kind, h.step), head: h.kind, step: h.step, digits: '', fret: null, paren: false, cx: h.cx, x0: h.x0, x1: h.x1, b: h.b, gray: false, src: null }));
+    for (const n of sy.notes) n.src = n;
+    sy.arcs = [];
+    // головки, сдвинутые вбок от штиля (секунда в аккорде), относим к тому же штилю
+    const allStems = sy.voices.flat();
+    for (const n of sy.notes) {
+      let best = null, bd = 2.6;
+      for (const st of allStems) { const d = Math.min(Math.abs(st.x - n.x0), Math.abs(st.x - n.x1)); if (d < bd) { bd = d; best = st; } }
+      if (best) n.cx = best.x;
+    }
+  }
   const letters = (systems.find(s => s.tun.length === nStr) || {}).tun;
+  // Бас: по названию, либо 4–6 струн с верхней струной соль/до (у гитары верхняя — ми/ре)
+  const topL = letters && letters[0] ? letters[0][0].toUpperCase() : '';
+  const isBass = !isDrum && (/bass|бас/i.test(meta.track + ' ' + meta.instrument) || (nStr <= 6 && (topL === 'G' || (topL === 'C' && nStr >= 5))));
   const tuning = (letters && inferTuning(letters, isBass)) || standardTuning(nStr, isBass);
   const tuningNames = letters && letters.length === nStr ? letters : null;
 
@@ -387,7 +451,8 @@ export function buildSong(systems, meta) {
       let c = cols[0], bd = 1e9; for (const k of cols) { const d = Math.abs(k.x - n.cx); if (d < bd) { bd = d; c = k; } }
       let dur = c.dur;
       if (n.gray && c.hits.length > 1) dur = c.hits[c.hits.length - 1].e.dur;
-      const midi = tuning[n.si] + n.fret;
+      const midi = isDrum ? n.drum : tuning[n.si] + n.fret;
+      if (isDrum) dur = Math.min(dur, 0.5);
       notes.push({ midi, string: n.si, fret: n.fret, start: m.start + c.t, dur: Math.max(0.05, dur), measure: m.n,
         tie: !!n.paren, gray: !!n.gray, src: n, x: n.cx, sy });
     }
@@ -399,7 +464,7 @@ export function buildSong(systems, meta) {
     for (let j = i + 1; j < notes.length; j++) {
       const b = notes[j];
       if (b.start >= a.start + a.dur - 1e-6) break;
-      if (b.string === a.string && b.sy === a.sy && b.start > a.start + 1e-6 && !b.tie) { a.dur = b.start - a.start; break; }
+      if (!isDrum && b.string === a.string && b.sy === a.sy && b.start > a.start + 1e-6 && !b.tie) { a.dur = b.start - a.start; break; }
     }
   }
   // Лиги-дуги внутри системы: продлеваем ноту до конца события под концом дуги
@@ -431,7 +496,7 @@ export function buildSong(systems, meta) {
     page: n.sy.page, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)) }));
   return {
     title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
-    tuning, tuningNames, strings: nStr, isBass,
+    tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
     measures: ms.map(m => ({ n: m.n, start: m.start, len: m.len, tempo: m.tempo, sig: m.sig })),
     totalBeats: total, notes: clean
   };

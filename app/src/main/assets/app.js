@@ -5,10 +5,10 @@ import { importMidi } from './import-midi.js';
 import { importScore } from './import-gp.js';
 import { makeTime, fromBeatSong, songSummary, KIND_LABEL, isStringKind, PPQ, GM_NAMES, GM_GROUPS } from './model.js';
 import { Engine } from './engine.js';
-import { PianoView, GuitarView, HAND, TRACK_COLORS } from './views.js';
+import { PianoView, GuitarView, DrumView, DRUM_NAMES, drumGroup, HAND, TRACK_COLORS } from './views.js';
 import { PdfView } from './pdfview.js';
 import { idb, ls } from './store.js';
-import { analyze, mergeSongs, alignOffset, extendMeasures, barPos } from './merge.js';
+import { analyze, mergeSongs, alignOffset, extendMeasures, barPos, pianoParts, handOctaveCheck } from './merge.js';
 import { toMidiBytes, toMusicXml } from './export.js';
 import { barOf } from './import-midi.js';
 
@@ -123,7 +123,7 @@ const P = {
   names: true, fullKb: false, stave: 'default', land: false, landDismissed: false, pressed: new Set(), prog: {}, speed: 1, loop: null, metro: false, keysNotes: [], fretNotes: [], scoreShown: null, vol: 0.8
 };
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5];
-const piano = new PianoView(), guitar = new GuitarView();
+const piano = new PianoView(), guitar = new GuitarView(), drumsView = new DrumView();
 const pdfView = new PdfView($('pdfWrap'), pdfjsLib, i => openEdit(i));
 
 async function openSong(id) {
@@ -142,7 +142,9 @@ async function openSong(id) {
   P.gTrack = set.gTrack != null ? set.gTrack : (fretIdx >= 0 ? fretIdx : tracks.findIndex(t => t.tuning));
   P.loop = null; P.scoreShown = null;
   const firstStringed = tracks[P.show[0]] && isStringKind(tracks[P.show[0]].kind) && tracks[P.show[0]].tuning;
-  P.mode = set.mode || (firstStringed ? 'fret' : 'keys');
+  P.dTrack = set.dTrack != null ? set.dTrack : tracks.findIndex(t => t.kind === 'drums');
+  const onlyDrums = tracks.every(t => t.kind === 'drums');
+  P.mode = set.mode || (onlyDrums ? 'drums' : firstStringed ? 'fret' : 'keys');
   engine.prog = P.prog;
   engine.load(song, P.time, song.source === 'gp' ? P.raw : null);
   prepare();
@@ -160,7 +162,7 @@ async function openSong(id) {
 }
 function saveSet() {
   if (!P.song) return;
-  ls.set('nv-set-' + P.song.id, { oct: P.oct, split: P.split, handMode: P.handMode, mode: P.mode, show: P.show, mute: P.mute, gTrack: P.gTrack, prog: P.prog });
+  ls.set('nv-set-' + P.song.id, { oct: P.oct, split: P.split, handMode: P.handMode, mode: P.mode, show: P.show, mute: P.mute, gTrack: P.gTrack, dTrack: P.dTrack, prog: P.prog });
 }
 function firstNoteSec() {
   let m = 1e9; for (const i of P.show) { const n = P.song.tracks[i] && P.song.tracks[i].notes.find(n => !n.deleted); if (n) m = Math.min(m, P.time.toSec(n.t)); }
@@ -199,6 +201,13 @@ function prepare() {
   out.sort((a, b) => a.s - b.s || a.m - b.m);
   P.keysNotes = out;
   piano.setRange(out, P.fullKb);
+  P.drumNotes = [];
+  const dt = tracks[P.dTrack];
+  if (dt && dt.kind === 'drums') {
+    dt.notes.forEach((n, idx) => { if (!n.deleted) P.drumNotes.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), m: n.m, idx }); });
+    P.drumNotes.sort((a, b) => a.s - b.s);
+    drumsView.setNotes(P.drumNotes);
+  }
   const gt = tracks[P.gTrack];
   P.fretNotes = [];
   if (gt && gt.tuning) {
@@ -219,16 +228,19 @@ function setMode(mode, silent) {
   if (mode === 'fret' && !(s.tracks[P.gTrack] && s.tracks[P.gTrack].tuning && P.fretNotes.length)) {
     if (!silent) toast('Нет дорожки со струнами (гитара или бас)'); mode = 'keys';
   }
+  if (mode === 'drums' && !P.drumNotes.length) { if (!silent) toast('В композиции нет ударных'); mode = 'keys'; }
+  if (mode === 'keys' && !P.keysNotes.length && P.drumNotes.length) mode = 'drums';
   if (mode === 'pdf' && s.source !== 'pdf') { if (!silent) toast('«Оригинал» есть только у PDF'); mode = P.mode === 'pdf' ? 'keys' : P.mode; }
   P.mode = mode; saveSet();
   for (const b of $('modes').children) {
     b.classList.toggle('on', b.dataset.mode === mode);
-    const off = (b.dataset.mode === 'pdf' && s.source !== 'pdf') || (b.dataset.mode === 'fret' && !P.fretNotes.length) || (b.dataset.mode === 'score' && (s.source !== 'gp' || s.custom));
+    const off = (b.dataset.mode === 'drums' && !P.drumNotes.length) || (b.dataset.mode === 'keys' && !P.keysNotes.length) || (b.dataset.mode === 'pdf' && s.source !== 'pdf') || (b.dataset.mode === 'fret' && !P.fretNotes.length) || (b.dataset.mode === 'score' && (s.source !== 'gp' || s.custom));
     b.classList.toggle('off', off);
   }
   $('landBtn').style.display = mode === 'keys' ? '' : 'none';
   if (mode !== 'keys' && P.land) exitLand(true);
-  $('cv').style.display = (mode === 'keys' || mode === 'fret') ? 'block' : 'none';
+  $('cv').style.display = (mode === 'keys' || mode === 'fret' || mode === 'drums') ? 'block' : 'none';
+  for (const b of $('modes').children) if (b.dataset.mode === 'drums') b.style.display = P.drumNotes.length ? '' : 'none';
   $('scoreWrap').classList.toggle('on', mode === 'score');
   $('pdfWrap').classList.toggle('on', mode === 'pdf');
   if (mode === 'score') showScore();
@@ -277,15 +289,17 @@ function frame() {
   const tick = engine.nowTick();
   const t = P.time.toSec(tick);
   const mi = P.time.measureAtSec(t);
-  if (P.mode === 'keys' || P.mode === 'fret') {
+  if (P.mode === 'keys' || P.mode === 'fret' || P.mode === 'drums') {
     if (!W) resize();
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
     const ctx = { t, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: P.loop ? { a: P.time.toSec(P.loop.ta), b: P.time.toSec(P.loop.tb) } : null };
     if (P.mode === 'keys') piano.draw(g, W, H, { ...ctx, notes: P.keysNotes, land: P.land, pressed: P.pressed });
+    else if (P.mode === 'drums') drumsView.draw(g, W, H, { ...ctx, notes: P.drumNotes, pressed: P.pressedPads });
     else { const tr = P.song.tracks[P.gTrack]; guitar.draw(g, W, H, { ...ctx, notes: P.fretNotes, tuningNames: tuningLabels(tr) }); }
   } else if (P.mode === 'pdf') {
     const act = new Set();
-    for (let i = firstIdx(P.fretNotes, t - 20); i < P.fretNotes.length; i++) { const n = P.fretNotes[i]; if (n.s > t) break; if (n.e > t) act.add(n.idx); }
+    const L = P.song.tracks[0].kind === 'drums' ? P.drumNotes : P.fretNotes;
+    for (let i = firstIdx(L, t - 20); i < L.length; i++) { const n = L[i]; if (n.s > t) break; if (n.e > t + (L === P.drumNotes ? -0.15 : 0) || (L === P.drumNotes && t - n.s < 0.15)) act.add(n.idx); }
     pdfView.follow = engine.playing; pdfView.highlight(act);
   }
   const now = performance.now();
@@ -345,6 +359,14 @@ $('loopSet').onclick = () => setLoop(+$('loopFrom').value, +$('loopTo').value);
 const touchKey = new Map();
 cv.addEventListener('pointerdown', e => {
   const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  if (P.mode === 'drums') {
+    const m = drumsView.hit(x, y);
+    if (m != null) {
+      const gid = drumGroup(m).id; P.pressedPads = P.pressedPads || new Set(); P.pressedPads.add(gid);
+      setTimeout(() => P.pressedPads.delete(gid), 140);
+      engine.previewNote(m, 0, true); return;
+    }
+  }
   if (P.mode === 'keys') {
     const m = piano.hit(x, y);
     if (m != null) {
@@ -451,13 +473,13 @@ function fillTracks() {
     b.textContent = [KIND_LABEL[tr.kind], tr.instrument && tr.instrument !== tr.name ? tr.instrument : '', tr.notes.length + ' нот', tr.tuning ? tr.tuning.length + ' струн' : ''].filter(Boolean).join(' · ');
     info.append(a, b);
     const showBtn = document.createElement('button'); showBtn.className = 'chip';
-    const isFret = P.mode === 'fret';
-    const canShow = isFret ? !!(tr.tuning && tr.notes.some(n => n.s != null)) : tr.kind !== 'drums';
-    const on = isFret ? P.gTrack === i : P.show.includes(i);
-    showBtn.textContent = isFret ? (on ? 'На грифе' : 'Гриф') : (on ? 'Показ ✓' : 'Показ');
+    const isFret = P.mode === 'fret', isDr = P.mode === 'drums';
+    const canShow = isFret ? !!(tr.tuning && tr.notes.some(n => n.s != null)) : isDr ? tr.kind === 'drums' : tr.kind !== 'drums';
+    const on = isFret ? P.gTrack === i : isDr ? P.dTrack === i : P.show.includes(i);
+    showBtn.textContent = isFret ? (on ? 'На грифе' : 'Гриф') : isDr ? (on ? 'Показ ✓' : 'Показ') : (on ? 'Показ ✓' : 'Показ');
     showBtn.classList.toggle('on', on); showBtn.disabled = !canShow; if (!canShow) showBtn.style.opacity = .4;
     showBtn.onclick = () => {
-      if (isFret) P.gTrack = i;
+      if (isFret) P.gTrack = i; else if (isDr) P.dTrack = i;
       else if (P.show.includes(i)) { if (P.show.length > 1) P.show = P.show.filter(x => x !== i); }
       else P.show = [...P.show, i].sort((x, y) => x - y);
       saveSet(); prepare(); P.scoreShown = P.mode === 'score' ? null : P.scoreShown; if (P.mode === 'score') showScore(); fillTracks();
@@ -492,7 +514,7 @@ function fillTracks() {
 $('listBtn').onclick = () => { fillList(); $('listSheet').classList.add('on'); };
 function fillList() {
   const box = $('mList'); box.innerHTML = '';
-  const ti = P.mode === 'fret' ? P.gTrack : P.show[0];
+  const ti = P.mode === 'fret' ? P.gTrack : P.mode === 'drums' ? P.dTrack : P.show[0];
   const tr = P.song.tracks[ti]; if (!tr) return;
   const head = document.createElement('div'); head.className = 'muted small'; head.textContent = 'Дорожка: ' + tr.name; box.appendChild(head);
   const by = new Map();
@@ -506,7 +528,8 @@ function fillList() {
     const d = document.createElement('div'); d.className = 'mrow' + (mn === cur ? ' cur' : '');
     const b = document.createElement('b'); b.textContent = mn; d.appendChild(b);
     const sp = document.createElement('span');
-    sp.textContent = groups.map(gg => gg.ns.sort((a, b) => a.m - b.m).map(n => NAMES[(n.m + 12 * P.oct) % 12].replace('соль', 'сол') + (Math.floor((n.m + 12 * P.oct) / 12) - 1) + (n.f != null && tr.tuning ? `(${n.s + 1}/${n.f})` : '')).join('+')).join('  ·  ');
+    if (tr.kind === 'drums') sp.textContent = groups.map(gg => gg.ns.map(n => DRUM_NAMES[n.m] || ('№' + n.m)).join('+')).join('  ·  ');
+    else sp.textContent = groups.map(gg => gg.ns.sort((a, b) => a.m - b.m).map(n => NAMES[(n.m + 12 * P.oct) % 12].replace('соль', 'сол') + (Math.floor((n.m + 12 * P.oct) / 12) - 1) + (n.f != null && tr.tuning ? `(${n.s + 1}/${n.f})` : '')).join('+')).join('  ·  ');
     d.appendChild(sp);
     d.onclick = () => { const i = P.song.measures.findIndex(m => m.n === mn); gotoMeasure(i); $('listSheet').classList.remove('on'); };
     box.appendChild(d);
@@ -522,21 +545,32 @@ function openEdit(i) {
   $('edTitle').textContent = `Такт ${n.bar}: ${noteName(n.m)}`;
   $('edInfo').textContent = n.edited ? 'Нота уже исправлена вручную' : 'Распознано автоматически';
   const s = $('edString'); s.innerHTML = '';
-  const lab = tuningLabels(tr) || [];
-  tr.tuning.forEach((m, k) => { const o = document.createElement('option'); o.value = k; o.textContent = `${k + 1} (${lab[k] || ''}, ${noteName(m)})`; s.appendChild(o); });
-  s.value = n.s; $('edFret').value = n.f; $('edDur').value = 'keep';
+  const drum = tr.kind === 'drums';
+  $('edFret').parentElement.style.display = drum ? 'none' : '';
+  $('edFret').parentElement.previousElementSibling.style.display = drum ? 'none' : '';
+  s.previousElementSibling.textContent = drum ? 'Инструмент' : 'Струна';
+  if (drum) {
+    $('edTitle').textContent = `Такт ${n.bar}: ${DRUM_NAMES[n.m] || 'удар'}`;
+    for (const [m, name] of Object.entries(DRUM_NAMES)) { const o = document.createElement('option'); o.value = m; o.textContent = name; s.appendChild(o); }
+    s.value = n.m;
+  } else {
+    const lab = tuningLabels(tr) || [];
+    tr.tuning.forEach((m, k) => { const o = document.createElement('option'); o.value = k; o.textContent = `${k + 1} (${lab[k] || ''}, ${noteName(m)})`; s.appendChild(o); });
+    s.value = n.s; $('edFret').value = n.f;
+  }
+  $('edDur').value = 'keep';
   updEdNote();
   $('editSheet').classList.add('on');
 }
-function updEdNote() { const tr = P.song.tracks[0]; const m = tr.tuning[+$('edString').value] + (+$('edFret').value || 0); $('edNote').textContent = '→ ' + noteName(m); }
+function updEdNote() { const tr = P.song.tracks[0]; if (tr.kind === 'drums') { $('edNote').textContent = ''; return; } const m = tr.tuning[+$('edString').value] + (+$('edFret').value || 0); $('edNote').textContent = '→ ' + noteName(m); }
 $('edString').onchange = updEdNote; $('edFret').oninput = updEdNote;
-$('edListen').onclick = () => { const tr = P.song.tracks[0]; engine.previewNote(tr.tuning[+$('edString').value] + (+$('edFret').value || 0) + 12 * P.oct, tr.program || 0); };
+$('edListen').onclick = () => { const tr = P.song.tracks[0]; if (tr.kind === 'drums') { engine.previewNote(+$('edString').value, 0, true); return; } engine.previewNote(tr.tuning[+$('edString').value] + (+$('edFret').value || 0) + 12 * P.oct, tr.program || 0); };
 async function saveEdit(del) {
   const tr = P.song.tracks[0], n = tr.notes[editIdx]; if (!n) return;
   if (del) n.deleted = true;
   else {
-    const s = +$('edString').value, f = Math.max(0, Math.min(30, +$('edFret').value || 0));
-    n.s = s; n.f = f; n.m = tr.tuning[s] + f;
+    if (tr.kind === 'drums') n.m = +$('edString').value;
+    else { const s = +$('edString').value, f = Math.max(0, Math.min(30, +$('edFret').value || 0)); n.s = s; n.f = f; n.m = tr.tuning[s] + f; }
     const d = $('edDur').value; if (d !== 'keep') n.d = Math.round(+d * PPQ);
   }
   n.edited = true;
@@ -583,7 +617,7 @@ function gmSelect(value, onChange, disabled) {
   return sel;
 }
 $('mergeBtn').onclick = () => {
-  MG.files = []; MG.ref = 0; MG.merged = null; MG.dirty = true; $('mTitle').value = '';
+  MG.files = []; MG.ref = 0; MG.merged = null; MG.dirty = true; MG.pianoJoin = null; MG.pianoName = ''; $('mTitle').value = '';
   show('merge'); renderMerge(); pickMerge();
 };
 function pickMerge() { if (A && A.openPickerMulti) A.openPickerMulti(); else $('mergeInput').click(); }
@@ -623,6 +657,40 @@ function renderMerge() {
   const an = analyze(MG.files, MG.ref);
   if (MG.files.length < 2) { const d = document.createElement('div'); d.className = 'warn'; d.textContent = 'Добавьте ещё хотя бы один файл.'; warnBox.appendChild(d); }
   for (const w of an.warnings) { const d = document.createElement('div'); d.className = 'warn'; d.textContent = '⚠ ' + w; warnBox.appendChild(d); }
+  // Умное объединение фортепиано
+  const parts = pianoParts(MG.files);
+  if (parts.length >= 2) {
+    const hands = parts.map(p => p.hand);
+    if (MG.pianoJoin == null) MG.pianoJoin = hands.includes('L') && hands.includes('R') || parts.length === 2;
+    const card = document.createElement('div'); card.className = 'okmsg piano';
+    const lab = document.createElement('label'); lab.className = 'row check'; lab.style.marginTop = '0';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = MG.pianoJoin;
+    cb.onchange = () => { MG.pianoJoin = cb.checked; MG.dirty = true; renderMerge(); };
+    const txt = document.createElement('span');
+    txt.textContent = 'Объединить партии фортепиано в одну: ' + parts.map(p => `«${p.sel.name}» — ${p.hand === 'L' ? 'левая' : p.hand === 'R' ? 'правая' : 'рука по высоте'}`).join(', ');
+    lab.append(cb, txt); card.appendChild(lab);
+    if (MG.pianoJoin) {
+      const nm = document.createElement('input'); nm.type = 'text'; nm.className = 'wide'; nm.style.marginTop = '8px';
+      nm.placeholder = 'Название общей партии'; nm.value = MG.pianoName || 'Фортепиано';
+      nm.oninput = () => { MG.pianoName = nm.value; MG.dirty = true; };
+      card.appendChild(nm);
+      const hint = document.createElement('div'); hint.className = 'small'; hint.style.marginTop = '6px';
+      hint.textContent = 'На клавишах руки будут разного цвета. Руку каждой дорожки можно поменять ниже.';
+      card.appendChild(hint);
+    }
+    warnBox.appendChild(card);
+    for (const p of parts) p.sel.join = MG.pianoJoin;
+    const oc = handOctaveCheck(parts);
+    if (oc) {
+      const d = document.createElement('div'); d.className = 'warn';
+      d.textContent = oc.far ? '⚠ Левая рука звучит намного ниже правой (больше трёх октав). Возможно, октава левой руки определена неверно.'
+        : '⚠ Левая рука звучит выше правой — похоже, октава левой руки определена неверно (так бывает с табами из PDF).';
+      const b = document.createElement('button'); b.className = 'chip'; b.style.marginLeft = '8px';
+      b.textContent = oc.far ? 'Левую руку на октаву выше' : `Левую руку на ${Math.abs(oc.shift)} окт. ниже`;
+      b.onclick = () => { for (const p of oc.L) p.sel.oct = (p.sel.oct || 0) + oc.shift; MG.dirty = true; renderMerge(); };
+      d.appendChild(b); warnBox.appendChild(d);
+    }
+  } else for (const f of MG.files) for (const sl of f.sel) sl.join = false;
   if (MG.files.length > 1 && !an.warnings.length) { const d = document.createElement('div'); d.className = 'okmsg'; d.textContent = 'Темп, такты и начало партий совпадают — партии объединятся без сдвигов.'; warnBox.appendChild(d); }
   MG.files.forEach((f, i) => {
     const inf = an.info[i];
@@ -671,6 +739,20 @@ function renderMerge() {
       const k = document.createElement('span'); k.className = 'badge'; k.textContent = `${KIND_LABEL[tr.kind]} · ${tr.notes.length} нот`;
       const ps = gmSelect(sl.program, v => { sl.program = v; MG.dirty = true; }, tr.kind === 'drums');
       sub.append(k, ps);
+      if (tr.kind !== 'drums') {
+        const oc = document.createElement('select'); oc.title = 'Октава';
+        oc.innerHTML = [-2, -1, 0, 1, 2].map(v => `<option value="${v}">${v === 0 ? 'октава как есть' : (v > 0 ? '+' : '−') + Math.abs(v) + ' окт.'}</option>`).join('');
+        oc.value = sl.oct || 0; oc.style.flex = '0 0 auto';
+        oc.onchange = () => { sl.oct = +oc.value; MG.dirty = true; renderMerge(); };
+        sub.append(oc);
+      }
+      if (tr.kind === 'piano') {
+        const hs = document.createElement('select'); hs.style.flex = '0 0 auto';
+        hs.innerHTML = '<option value="auto">рука: ' + (tr.hand === 'L' ? 'левая (по названию)' : tr.hand === 'R' ? 'правая (по названию)' : 'по высоте') + '</option><option value="R">правая рука</option><option value="L">левая рука</option>';
+        hs.value = sl.hand || 'auto';
+        hs.onchange = () => { sl.hand = hs.value; MG.dirty = true; renderMerge(); };
+        sub.append(hs);
+      }
       row.append(cb, name, sub); c.appendChild(row);
     });
     box.appendChild(c);
@@ -680,7 +762,7 @@ function renderMergeSub() { $('mSub').textContent = `${MG.files.length} файл
 function buildMerged() {
   if (!MG.dirty && MG.merged) return MG.merged;
   if (MG.files.length < 1) throw new Error('Нет файлов');
-  const { song, tooMany } = mergeSongs(MG.files, MG.ref, ($('mTitle').value || 'Объединённая композиция').trim());
+  const { song, tooMany } = mergeSongs(MG.files, MG.ref, ($('mTitle').value || 'Объединённая композиция').trim(), (MG.pianoName || 'Фортепиано').trim());
   if (tooMany) toast('Слишком много разных инструментов (больше 15): некоторые дорожки будут звучать одним тембром');
   MG.merged = song; MG.time = makeTime(song); MG.dirty = false;
   return song;
