@@ -69,3 +69,28 @@ input[type=number]{width:76px}
 @keyframes sp{to{transform:rotate(360deg)}}
 .toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:#2a2f3a;border:1px solid var(--line);padding:10px 14px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:30;max-width:90%;text-align:center}
 .toast.on{opacity:1}
+.modes{display:flex;gap:4px;padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--line)}
+.modes button{flex:1;font-size:13px;padding:7px 2px;border-radius:9px;background:none;border:1px solid transparent;color:var(--mut)}
+.modes button.on{background:var(--bg3);border-color:var(--line);color:var(--tx)}
+.modes button.off{opacity:.45}
+.pane{position:absolute;inset:0;overflow:auto;display:none;background:#fff;color:#000}
+.pane.on{display:block}
+#pdfWrap{background:#2b2f37;color:var(--tx);padding:4px}
+#scoreWrap .pad{background:var(--bg);color:var(--mut)}
+.pad{padding:14px}
+.pdfpage{position:relative;margin:4px auto 10px;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.4)}
+.nbox{position:absolute;border:1.5px solid rgba(76,154,255,.75);border-radius:3px;background:rgba(76,154,255,.08)}
+.nbox.edited{border-color:#3ccf8e;background:rgba(60,207,142,.15)}
+.nbox.on{background:rgba(255,138,61,.45);border-color:#ff8a3d}
+.trow{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line)}
+.trow .grow{flex:1;min-width:0}
+.trow .grow div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .dot{width:12px;height:12px;border-radius:3px;flex:none}
+.danger{border-color:#7a2c2c;color:#ff8f8f}
+.badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--mut);margin-right:4px}
+#at{min-height:100px}
+.scorebar{position:sticky;top:0;z-index:5;display:flex;gap:6px;padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--line)}
+.at-cursor-bar{background:rgba(255,242,0,.22)}
+.at-selection div{background:rgba(64,64,255,.1)}
+.at-cursor-beat{background:rgba(76,154,255,.85);width:3px}
+.at-highlight *{fill:#0078ff;stroke:#0078ff}

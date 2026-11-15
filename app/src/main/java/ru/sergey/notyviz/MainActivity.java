@@ -128,7 +128,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
         }
         if (name == null) name = uri.getLastPathSegment();
-        return name == null ? "PDF" : name;
+        return name == null ? "file" : name;
     }
 
     private static byte[] readAll(InputStream in) throws Exception {
@@ -195,7 +195,12 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
-                i.setType("application/pdf");
+                i.setType("*/*");
+                i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                        "application/pdf", "audio/midi", "audio/x-midi", "audio/mid",
+                        "application/x-guitar-pro", "application/gpx+xml",
+                        "application/vnd.recordare.musicxml+xml", "application/vnd.recordare.musicxml",
+                        "application/xml", "text/xml", "application/octet-stream", "application/zip"});
                 try {
                     startActivityForResult(i, REQ_OPEN);
                 } catch (Exception e) {

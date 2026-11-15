@@ -5,29 +5,42 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>NotyViz</title>
 <link rel="stylesheet" href="style.css">
+<script src="lib/Midi.js"></script>
 </head>
 <body>
 
 <section id="home" class="screen on">
   <header class="top">
     <div class="logo"><span class="k1"></span><span class="k2"></span><span class="k1"></span></div>
-    <div><h1>NotyViz</h1><p class="muted">Табы → клавиатура с падающими нотами</p></div>
+    <div><h1>NotyViz</h1><p class="muted">Ноты и табы → клавиатура и гриф</p></div>
   </header>
-  <button id="importBtn" class="primary big">Открыть PDF</button>
-  <p class="muted small">Подходят PDF-табулатуры из Songsterr. Файл можно также открыть из «Загрузок» или через «Поделиться» → NotyViz.</p>
+  <button id="importBtn" class="primary big">Импортировать файл</button>
+  <p class="muted small">PDF-табулатуры Songsterr, MIDI (.mid), Guitar Pro (.gp, .gp3, .gp4, .gp5, .gpx) и MusicXML. Файл можно открыть и из «Загрузок» или через «Поделиться» → NotyViz.</p>
+  <div id="soundState" class="muted small"></div>
   <h2 class="sec">Последние</h2>
   <div id="recent"></div>
-  <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden>
+  <input type="file" id="fileInput" accept=".pdf,.mid,.midi,.gp,.gp3,.gp4,.gp5,.gpx,.gp7,.xml,.musicxml,.mxl,application/pdf,audio/midi" hidden>
 </section>
 
 <section id="player" class="screen">
   <header class="pbar">
     <button id="backBtn" class="icon" aria-label="Назад">‹</button>
     <div class="ptitle"><div id="pTitle"></div><div id="pSub" class="muted small"></div></div>
+    <button id="trackBtn" class="icon" aria-label="Дорожки">♫</button>
     <button id="listBtn" class="icon" aria-label="Ноты по тактам">☰</button>
     <button id="setBtn" class="icon" aria-label="Настройки">⚙</button>
   </header>
-  <div id="stage"><canvas id="cv"></canvas></div>
+  <div class="modes" id="modes">
+    <button data-mode="keys" class="on">Клавиши</button>
+    <button data-mode="fret">Гриф</button>
+    <button data-mode="score">Ноты</button>
+    <button data-mode="pdf">Оригинал</button>
+  </div>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="scoreWrap" class="pane"><div id="scoreBar" class="scorebar"><button data-stave="default" class="chip on">Ноты + табы</button><button data-stave="score" class="chip">Ноты</button><button data-stave="tab" class="chip">Табы</button></div><div id="scoreMsg" class="muted pad"></div><div id="at"></div></div>
+    <div id="pdfWrap" class="pane"></div>
+  </div>
   <div class="ctrl">
     <div class="row">
       <span id="posLbl" class="pos">Такт 1</span>
@@ -59,9 +72,10 @@
       <button id="loopSet" class="chip">Включить</button>
     </div>
 
-    <label class="lbl">Руки</label>
+    <label class="lbl">Руки (клавиши)</label>
     <div class="row gap">
       <select id="handMode">
+        <option value="auto">Как в файле, иначе по высоте</option>
         <option value="split">Делить по высоте</option>
         <option value="right">Всё — правая рука</option>
       </select>
@@ -82,15 +96,44 @@
   </div>
 </div>
 
+<div id="trackSheet" class="sheet">
+  <div class="sheet-body">
+    <div class="sheet-head"><b>Дорожки</b><button class="icon" data-close>✕</button></div>
+    <p class="muted small">«Показ» — какие дорожки видны на клавишах (на грифе — одна). «Звук» — отключить или включить инструмент.</p>
+    <div id="tList"></div>
+  </div>
+</div>
+
 <div id="listSheet" class="sheet">
   <div class="sheet-body tall">
-    <div class="sheet-head"><b>Распознанные ноты</b><button class="icon" data-close>✕</button></div>
+    <div class="sheet-head"><b>Ноты по тактам</b><button class="icon" data-close>✕</button></div>
     <p class="muted small">Нажмите на такт, чтобы перейти к нему.</p>
     <div id="mList"></div>
   </div>
 </div>
 
-<div id="busy" class="busy"><div class="spin"></div><div id="busyTxt">Разбираю PDF…</div></div>
+<div id="editSheet" class="sheet">
+  <div class="sheet-body">
+    <div class="sheet-head"><b id="edTitle">Нота</b><button class="icon" data-close>✕</button></div>
+    <div id="edInfo" class="muted small"></div>
+    <label class="lbl">Струна</label>
+    <select id="edString"></select>
+    <label class="lbl">Лад</label>
+    <div class="row gap"><input type="number" id="edFret" min="0" max="30" inputmode="numeric"><span id="edNote" class="muted"></span></div>
+    <label class="lbl">Длительность</label>
+    <select id="edDur">
+      <option value="4">целая</option><option value="2">половинная</option><option value="1">четверть</option>
+      <option value="0.5">восьмая</option><option value="0.25">шестнадцатая</option><option value="keep">как есть</option>
+    </select>
+    <div class="row gap" style="margin-top:16px">
+      <button id="edSave" class="primary">Сохранить</button>
+      <button id="edListen">Послушать</button>
+      <button id="edDel" class="danger">Удалить ноту</button>
+    </div>
+  </div>
+</div>
+
+<div id="busy" class="busy"><div class="spin"></div><div id="busyTxt">Разбираю файл…</div></div>
 <div id="toast" class="toast"></div>
 
 <script type="module" src="app.js"></script>

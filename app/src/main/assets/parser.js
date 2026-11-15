@@ -427,7 +427,8 @@ export function buildSong(systems, meta) {
     }
     outNotes.push(n);
   }
-  const clean = outNotes.map(n => ({ midi: n.midi, start: +n.start.toFixed(4), dur: +n.dur.toFixed(4), string: n.string, fret: n.fret, measure: n.measure, voice: n.gray ? 1 : 0 }));
+  const clean = outNotes.map(n => ({ midi: n.midi, start: +n.start.toFixed(4), dur: +n.dur.toFixed(4), string: n.string, fret: n.fret, measure: n.measure, voice: n.gray ? 1 : 0,
+    page: n.sy.page, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)) }));
   return {
     title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning, tuningNames, strings: nStr, isBass,
