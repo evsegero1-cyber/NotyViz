@@ -24,6 +24,7 @@ export const TIMBRES = [
   { id: 'tine', gain: -2, name: 'Электропиано (Tine)', group: 'piano', pack: 'gm', prog: '4', fx: 'ep' },
   { id: 'cp70', name: 'Электрический рояль (CP-70)', group: 'piano', pack: 'gm', prog: '2' },
   { id: 'fmep', gain: -2, name: 'Электропиано FM (DX7)', group: 'piano', pack: 'gm', prog: '5', fx: 'ep' },
+  { id: 'egtr_amp', gain: 0, name: 'Электрогитара — Marshall (запись через усилитель)', group: 'guitar', pack: 'egtra', prog: 'notes', fx: 'amped', chords: true },
   { id: 'egtr_clean', gain: 1, name: 'Электрогитара — Clean', group: 'guitar', pack: 'egtr', prog: 'notes', fx: 'clean' },
   { id: 'egtr_crunch', gain: -3, name: 'Электрогитара — Overdrive', group: 'guitar', pack: 'egtr', prog: 'notes', fx: 'crunch' },
   { id: 'egtr_dist', gain: -3, name: 'Электрогитара — Distortion', group: 'guitar', pack: 'egtr', prog: 'notes', fx: 'dist' },
@@ -54,13 +55,13 @@ export function defaultTimbre(tr, progOverride, trusted) {
   const p = progOverride != null ? progOverride : (tr.program || 0);
   if (tr.kind === 'drums') return 'kit_live';
   if (p <= 7 && (tr.kind === 'piano' || progOverride != null || trusted || !isStringKind(tr.kind))) return ({ 0: 'grand', 1: 'bright', 2: 'cp70', 3: 'gm:3', 4: 'rhodes', 5: 'fmep', 6: 'gm:6', 7: 'gm:7' })[p];
-  if (p >= 24 && p <= 31) return ({ 24: 'nylon', 25: 'agtr', 26: 'jazz', 27: 'egtr_clean', 28: 'egtr_clean', 29: 'egtr_crunch', 30: 'egtr_dist', 31: 'gm:31' })[p];
+  if (p >= 24 && p <= 31) return ({ 24: 'nylon', 25: 'agtr', 26: 'jazz', 27: 'egtr_clean', 28: 'egtr_clean', 29: 'egtr_amp', 30: 'egtr_amp', 31: 'gm:31' })[p];
   if (p >= 32 && p <= 37) return ({ 32: 'bass_acoustic', 33: 'bass_finger', 34: 'bass_pick', 35: 'bass_fretless', 36: 'bass_slap', 37: 'bass_pop' })[p];
   // номер инструмента неизвестен (0 у гитарной/басовой дорожки) — по типу дорожки
   if (p === 0 && progOverride == null && !trusted) {
     if (tr.kind === 'bass') return 'bass_finger';
     if (tr.kind === 'aguitar') return 'agtr';
-    if (tr.kind === 'eguitar' || tr.kind === 'guitar') return 'egtr_dist';
+    if (tr.kind === 'eguitar' || tr.kind === 'guitar') return 'egtr_amp';
   }
   return 'gm:' + p;
 }
@@ -69,6 +70,7 @@ export function defaultTimbre(tr, progOverride, trusted) {
 // Параметры: drive 0..1, gain (дБ), low/mid/high (дБ), cab (кабинет), chorus, delay, delayTime, reverb (посыл)
 export const FX_PRESETS = {
   none: { label: 'Без обработки', amp: null, reverb: 0.12 },
+  amped: { label: 'Звук усилителя (в записи)', amp: null, reverb: 0.1, low: 0, mid: 0, high: 0 },
   piano: { label: 'Фортепиано', amp: null, reverb: 0.18, low: 0, mid: 0, high: 0 },
   ep: { label: 'Электропиано', amp: 'clean', drive: 0.05, cab: false, chorus: 0.25, reverb: 0.18, low: 1, mid: 0, high: 0 },
   clean: { label: 'Clean', amp: 'clean', drive: 0.12, cab: true, chorus: 0.2, delay: 0, delayTime: 0.36, reverb: 0.2, low: 1, mid: 0, high: 2 },
@@ -79,7 +81,7 @@ export const FX_PRESETS = {
   bass: { label: 'Бас', amp: 'bass', drive: 0.08, cab: true, reverb: 0.04, low: 2, mid: 0, high: 0 },
   drums: { label: 'Ударные', amp: null, reverb: 0.1, low: 0, mid: 0, high: 0 },
 };
-export const FX_FOR_GROUP = { piano: ['piano', 'ep', 'none'], guitar: ['clean', 'crunch', 'dist', 'lead', 'acoustic', 'none'], bass: ['bass', 'none'], drums: ['drums', 'none'], gm: ['none', 'clean', 'crunch', 'dist'] };
+export const FX_FOR_GROUP = { piano: ['piano', 'ep', 'none'], guitar: ['amped', 'clean', 'crunch', 'dist', 'lead', 'acoustic', 'none'], bass: ['bass', 'none'], drums: ['drums', 'none'], gm: ['none', 'clean', 'crunch', 'dist'] };
 
 function curve(kind, amount) {
   const n = 2048, c = new Float32Array(n);
@@ -280,9 +282,29 @@ function pickRegion(inst, m, v, rrState, trig) {
 // Живая игра медиатором: аккорд звучит не одним ударом, а «проходом» по струнам
 // (вниз — с толстой струны, на слабую долю вверх — с тонкой), сила чуть разная от ноты к ноте.
 // Одиночные ноты по времени не сдвигаются. Разброс детерминированный — каждый раз звучит одинаково.
+// Пауэр-аккорды (квинта, квинта + октава) у гитары «через усилитель» играются цельной записью аккорда:
+// в перегрузе струны смешиваются, и сумма отдельных нот так не звучит. Остальные ноты аккорда только видны.
+export function markPowerChords(evs, isAmp) {
+  const by = new Map();
+  for (const e of evs) { if (!isAmp(e.tr)) continue; const k = e.tr + ':' + e.t; if (!by.has(k)) by.set(k, []); by.get(k).push(e); }
+  for (const g of by.values()) {
+    if (g.length < 2 || g.length > 3) continue;
+    g.sort((a, b) => a.m - b.m);
+    const iv = g.map(e => e.m - g[0].m).join(',');
+    const kind = iv === '0,7' ? 'p5' : iv === '0,7,12' ? 'p8' : null;
+    if (!kind) continue;
+    const pm = g.every(e => e.ch === 'pm'), mixed = g.some(e => e.ch && e.ch !== 'pm');
+    if (mixed) continue;
+    g[0].chord = kind + (pm ? 'pm' : ''); g[0].chordStr = g.map(e => e.str).filter(x => x != null);
+    g[0].v = Math.round(g.reduce((a, e) => a + e.v, 0) / g.length); g[0].e = Math.max(...g.map(e => e.e));
+    for (let i = 1; i < g.length; i++) g[i].skip = true;
+  }
+}
+
 export function humanizeStrums(evs, tracks, ppq) {
   const byKey = new Map();
   for (const e of evs) {
+    if (e.chord || e.skip) continue;
     const tr = tracks[e.tr]; if (!tr || (tr.kind !== 'eguitar' && tr.kind !== 'aguitar' && tr.kind !== 'guitar')) continue;
     const h = ((e.t * 7919 + e.m * 104729 + e.tr * 31) % 1000) / 1000;      // псевдослучайное 0..1
     e.v = Math.max(1, Math.min(127, Math.round(e.v + (h - 0.5) * 10)));
@@ -367,6 +389,7 @@ export class AudioEngine {
       }
       tr._bends = bends && bends.length ? bends : null;
     });
+    markPowerChords(evs, ti => { const tb = timbreFor(this.timbreOf(ti)); return !!tb.chords; });
     humanizeStrums(evs, song.tracks, PPQ);
     evs.sort((a, b) => a.s - b.s || a.tr - b.tr || a.m - b.m);
     evs.forEach((e, i) => e.i = i);
@@ -419,7 +442,15 @@ export class AudioEngine {
     // тембры техник
     const has = ch => evs.some(e => e.ch === ch);
     if (!drum && has('dead')) {
-      try { res.dead = tb.pack === 'egtr' ? await this.bank.program('egtr', 'dead') : tb.group === 'bass' ? await this.bank.program('bass', 'muted', needFor(false)) : await this.bank.program('gm', '28', needFor(false)); } catch (e) { }
+      try { res.dead = tb.pack === 'egtr' || tb.pack === 'egtra' ? await this.bank.program(tb.pack, 'dead') : tb.group === 'bass' ? await this.bank.program('bass', 'muted', needFor(false)) : await this.bank.program('gm', '28', needFor(false)); } catch (e) { }
+    }
+    if (!drum && tb.chords) {
+      res.chords = {};
+      for (const k of new Set(evs.filter(e => e.chord).map(e => e.chord))) {
+        const ks = new Set(evs.filter(e => e.chord === k).map(e => e.m));
+        try { res.chords[k] = await this.bank.program(tb.pack, k, r => [...ks].some(m => m >= r.lk - 1 && m <= r.hk + 1)); } catch (e) { }
+      }
+      if (has('pm')) { try { res.pmNotes = await this.bank.program(tb.pack, 'pm', needFor(false)); } catch (e) { } }
     }
     if (!drum && has('harm')) { try { res.harm = await this.bank.program('gm', '31', needFor(false)); } catch (e) { } }
     if (!drum && has('pm') && tb.group === 'bass' && tb.pack === 'bass') { try { res.muted = await this.bank.program('bass', 'muted', needFor(false)); } catch (e) { } }
@@ -597,6 +628,7 @@ export class AudioEngine {
       if (!ok) this.stats.unknownDrums++;
       return;
     }
+    if (e.skip) return; // нота пауэр-аккорда, который звучит цельной записью
     // струнные: одна струна — один голос (новая нота на той же струне гасит предыдущую)
     const strKey = isStringKind(tr.kind) && e.str != null ? e.tr + ':' + e.str : null;
     let legato = false;
@@ -605,7 +637,14 @@ export class AudioEngine {
       if (prev && prev.end > when - 0.005) { legato = !!e.legato; this.release(prev, when, legato ? 0.012 : 0.02); }
     }
     let src = inst.main, opts = { legato };
+    if (e.chord && inst.chords && inst.chords[e.chord]) {
+      for (const st of e.chordStr || []) { const pv = this.strings.get(e.tr + ':' + st); if (pv && pv.end > when - 0.005) this.release(pv, when, 0.02); }
+      const v = this.playRegionNote(inst.chords[e.chord], e.m, e.v, when, off, dest, e, tr._bends, {});
+      if (v) for (const st of e.chordStr || []) this.strings.set(e.tr + ':' + st, v);
+      return;
+    }
     if (e.ch === 'dead' && inst.dead) { src = inst.dead; opts.dead = true; }
+    else if (e.ch === 'pm' && inst.pmNotes) src = inst.pmNotes;
     else if (e.ch === 'harm' && inst.harm) src = inst.harm;
     else if (e.ch === 'pm') { if (inst.muted) src = inst.muted; else opts.pm = true; }
     if (e.slap && inst.slap) src = e.slap === 'pop' && inst.pop ? inst.pop : inst.slap;
