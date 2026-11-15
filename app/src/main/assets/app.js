@@ -1,9 +1,10 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
 import * as alphaTab from './lib/alphatab/alphaTab.min.mjs';
 import { parseSongsterrPdf } from './parser.js';
+import { recognizePdf } from './omr.js';
 import { importMidi } from './import-midi.js';
 import { importScore } from './import-gp.js';
-import { makeTime, fromBeatSong, songSummary, KIND_LABEL, isStringKind, PPQ, GM_NAMES, GM_GROUPS } from './model.js';
+import { makeTime, fromBeatSong, songSummary, assignChannels, KIND_LABEL, isStringKind, PPQ, GM_NAMES, GM_GROUPS } from './model.js';
 import { perform, TECH, techIds } from './techniques.js';
 import { Engine } from './engine.js';
 import { TIMBRES, TIMBRE, timbreFor, defaultTimbre, GROUP_LABEL, FX_PRESETS, FX_FOR_GROUP, GM_DRUMS } from './audio.js';
@@ -76,10 +77,21 @@ const isMidi = b => b[0] === 0x4d && b[1] === 0x54 && b[2] === 0x68 && b[3] === 
 async function parseFile(bytes, name, progress) {
   let song, keepRaw = false;
   if (isPdf(bytes)) {
-    const old = await parseSongsterrPdf(pdfjsLib, bytes.slice(), progress);
-    if (!old.notes.length) throw new Error('Ноты не найдены. Сейчас поддерживаются PDF-табулатуры Songsterr.');
-    song = fromBeatSong(old); keepRaw = true;
-    if (!song.title || song.title === 'Без названия') song.title = (name || 'PDF').replace(/\.pdf$/i, '');
+    // 1) табулатура Songsterr (точное чтение цифр и ритма); 2) обычная нотная запись — распознавание нот
+    let old = null;
+    try { old = await parseSongsterrPdf(pdfjsLib, bytes.slice(), progress); } catch (e) { old = null; }
+    // ударные из PDF читаются только в нотации Songsterr (иначе головки обычных нот приняли бы за удары)
+    let isSongsterr = false;
+    try { const d = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise; const tc = await (await d.getPage(1)).getTextContent(); isSongsterr = /songsterr/i.test(tc.items.map(i => i.str).join(' ')); } catch (e) { }
+    if (old && old.notes.length && (!old.isDrum || isSongsterr)) {
+      song = fromBeatSong(old); keepRaw = true;
+    } else {
+      const r = await recognizePdf(pdfjsLib, bytes.slice(), t => busy(true, t));
+      if (!r.song || !r.song.tracks.length) throw new Error((r.report.problems[0] || 'Ноты не найдены.') + ' Поддерживаются PDF с нотами (из нотных редакторов и сервисов) и табулатуры Songsterr.');
+      song = r.song; song.omrReport = r.report; keepRaw = true;
+      assignChannels(song.tracks);
+    }
+    if (!song.title || song.title === 'Без названия' || song.title === 'Ноты из PDF') song.title = (name || 'PDF').replace(/\.pdf$/i, '');
   } else if (isMidi(bytes)) {
     song = importMidi(window.Midi, bytes, name);
   } else {
@@ -99,7 +111,8 @@ async function importFile(bytes, name) {
     await idb.put('meta', song.id, songSummary(song));
     busy(false);
     renderRecent();
-    openSong(song.id);
+    await openSong(song.id);
+    if (song.omrReport) showOmrReport();
   } catch (e) {
     busy(false); console.error(e);
     toast('Не получилось открыть файл: ' + (e.message || e));
@@ -127,7 +140,7 @@ const P = {
 };
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5];
 const piano = new PianoView(), guitar = new GuitarView(), drumsView = new DrumView();
-const pdfView = new PdfView($('pdfWrap'), pdfjsLib, i => openEdit(i));
+const pdfView = new PdfView($('pdfWrap'), pdfjsLib, (i, ti) => openEdit(i, ti));
 
 async function openSong(id) {
   const song = await idb.get('songs', id);
@@ -224,6 +237,10 @@ function prepare() {
   const lastBy = new Map();
   for (let k = out.length - 1; k >= 0; k--) { const q = out[k]; if (q.x && q.x.leg) { const nx = lastBy.get(q.tk); if (nx != null) q.nextIdx = nx; } if (q.first) lastBy.set(q.tk, k); }
   P.keysNotes = out;
+  // ноты для подсветки на оригинале PDF (все дорожки)
+  P.pdfNotes = [];
+  tracks.forEach((tr, ti) => tr.notes.forEach((n, i) => { if (!n.deleted && n.box) P.pdfNotes.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), key: ti + ':' + i }); }));
+  P.pdfNotes.sort((a, b) => a.s - b.s);
   piano.setRange(out, P.fullKb);
   P.drumNotes = [];
   const dt = tracks[P.dTrack];
@@ -266,7 +283,9 @@ function setMode(mode, silent) {
   }
   $('landBtn').style.display = mode === 'keys' ? '' : 'none';
   if (mode !== 'keys' && P.land) exitLand(true);
-  $('cv').style.display = (mode === 'keys' || mode === 'fret' || mode === 'drums') ? 'block' : 'none';
+  const split = mode === 'pdf' && !!s.omr;
+  $('player').classList.toggle('split', split);
+  $('cv').style.display = (mode === 'keys' || mode === 'fret' || mode === 'drums' || split) ? 'block' : 'none';
   for (const b of $('modes').children) if (b.dataset.mode === 'drums') b.style.display = P.drumNotes.length ? '' : 'none';
   $('scoreWrap').classList.toggle('on', mode === 'score');
   $('pdfWrap').classList.toggle('on', mode === 'pdf');
@@ -328,9 +347,10 @@ function frame() {
     engine.syncScore();
   } else if (P.mode === 'pdf') {
     const act = new Set();
-    const L = P.song.tracks[0].kind === 'drums' ? P.drumNotes : P.fretNotes;
-    for (let i = firstIdx(L, t - 20); i < L.length; i++) { const n = L[i]; if (n.s > t) break; if (n.e > t + (L === P.drumNotes ? -0.15 : 0) || (L === P.drumNotes && t - n.s < 0.15)) act.add(n.idx); }
+    const L = P.pdfNotes || [];
+    for (let i = firstIdx(L, t - 20); i < L.length; i++) { const n = L[i]; if (n.s > t) break; if (n.e > t || t - n.s < 0.15) act.add(n.key); }
     pdfView.follow = engine.playing; pdfView.highlight(act);
+    if (P.song.omr && P.keysNotes.length) { if (!W) resize(); g.setTransform(DPR, 0, 0, DPR, 0, 0); P.hot = []; piano.draw(g, W, H, { t, tick, hot: null, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: null, notes: P.keysNotes, land: false, pressed: P.pressed, pedal: P.pedal }); }
   }
   const now = performance.now();
   if (now - lastUi > 150) {
@@ -567,11 +587,20 @@ function fillList() {
 
 // ---------- Правка нот (PDF) ----------
 let editIdx = -1;
-function openEdit(i) {
-  const tr = P.song.tracks[0], n = tr.notes[i]; if (!n) return;
-  editIdx = i;
-  $('edTitle').textContent = `Такт ${n.bar}: ${noteName(n.m)}`;
-  $('edInfo').textContent = n.edited ? 'Нота уже исправлена вручную' : 'Распознано автоматически';
+let editTr = 0, edPitch = 60;
+function openEdit(i, ti = 0) {
+  const tr = P.song.tracks[ti], n = tr && tr.notes[i]; if (!n) return;
+  editIdx = i; editTr = ti; edPitch = n.m;
+  $('edTitle').textContent = `Такт ${n.bar}: ${noteName(n.m)}` + (P.song.tracks.length > 1 ? ' · ' + tr.name : '');
+  $('edInfo').textContent = n.edited ? 'Нота уже исправлена вручную' : n.unsure ? 'Распознано неуверенно: ' + (n.why || 'проверьте ноту') : 'Распознано автоматически';
+  const pitchMode = !tr.tuning && tr.kind !== 'drums';
+  $('edPitchRow').style.display = pitchMode ? '' : 'none';
+  $('edString').style.display = pitchMode ? 'none' : '';
+  $('edFret').parentElement.style.display = pitchMode ? 'none' : '';
+  $('edString').previousElementSibling.style.display = pitchMode ? 'none' : '';
+  $('edFret').parentElement.previousElementSibling.style.display = pitchMode ? 'none' : '';
+  $('edOk').style.display = n.unsure ? '' : 'none';
+  if (pitchMode) { $('edDur').value = 'keep'; updEdNote(); $('editSheet').classList.add('on'); return; }
   const s = $('edString'); s.innerHTML = '';
   const drum = tr.kind === 'drums';
   $('edFret').parentElement.style.display = drum ? 'none' : '';
@@ -590,18 +619,20 @@ function openEdit(i) {
   updEdNote();
   $('editSheet').classList.add('on');
 }
-function updEdNote() { const tr = P.song.tracks[0]; if (tr.kind === 'drums') { $('edNote').textContent = ''; return; } const m = tr.tuning[+$('edString').value] + (+$('edFret').value || 0); $('edNote').textContent = '→ ' + noteName(m); }
+function updEdNote() { const tr = P.song.tracks[editTr]; if (!tr.tuning && tr.kind !== 'drums') { $('edPitch').textContent = noteName(edPitch) + ' (MIDI ' + edPitch + ')'; return; } if (tr.kind === 'drums') { $('edNote').textContent = ''; return; } const m = tr.tuning[+$('edString').value] + (+$('edFret').value || 0); $('edNote').textContent = '→ ' + noteName(m); }
 $('edString').onchange = updEdNote; $('edFret').oninput = updEdNote;
-$('edListen').onclick = () => { const tr = P.song.tracks[0]; if (tr.kind === 'drums') { engine.previewNote(+$('edString').value, 0, true); return; } engine.previewNote(tr.tuning[+$('edString').value] + (+$('edFret').value || 0) + 12 * P.oct, tr.program || 0, false, curTimbre(0)); };
+for (const [id, d] of [['edDn', -1], ['edUp', 1], ['edOctDn', -12], ['edOctUp', 12]]) $(id).onclick = () => { edPitch = Math.max(12, Math.min(120, edPitch + d)); updEdNote(); engine.previewNote(edPitch, 0, false, curTimbre(editTr)); };
+$('edListen').onclick = () => { const tr = P.song.tracks[editTr]; if (!tr.tuning && tr.kind !== 'drums') { engine.previewNote(edPitch + 12 * P.oct, 0, false, curTimbre(editTr)); return; } if (tr.kind === 'drums') { engine.previewNote(+$('edString').value, 0, true); return; } engine.previewNote(tr.tuning[+$('edString').value] + (+$('edFret').value || 0) + 12 * P.oct, tr.program || 0, false, curTimbre(0)); };
 async function saveEdit(del) {
-  const tr = P.song.tracks[0], n = tr.notes[editIdx]; if (!n) return;
+  const tr = P.song.tracks[editTr], n = tr.notes[editIdx]; if (!n) return;
   if (del) n.deleted = true;
   else {
-    if (tr.kind === 'drums') n.m = +$('edString').value;
+    if (!tr.tuning && tr.kind !== 'drums') n.m = edPitch;
+    else if (tr.kind === 'drums') n.m = +$('edString').value;
     else { const s = +$('edString').value, f = Math.max(0, Math.min(30, +$('edFret').value || 0)); n.s = s; n.f = f; n.m = tr.tuning[s] + f; }
     const d = $('edDur').value; if (d !== 'keep') n.d = Math.round(+d * PPQ);
   }
-  n.edited = true;
+  n.edited = true; delete n.unsure;
   P.song.editVer = (P.song.editVer || 0) + 1;
   await idb.put('songs', P.song.id, P.song); await idb.put('meta', P.song.id, songSummary(P.song));
   prepare(); engine.rebuildMidi(P.song);
@@ -610,6 +641,7 @@ async function saveEdit(del) {
   toast(del ? 'Нота удалена' : 'Сохранено');
 }
 $('edSave').onclick = () => saveEdit(false);
+$('edOk').onclick = () => saveEdit(false);
 $('edDel').onclick = () => saveEdit(true);
 
 // ---------- Системное ----------
@@ -1165,3 +1197,33 @@ $('diagRun').onclick = async () => {
 };
 
 window.__nv = { engine, P };
+
+// ---------- Результат распознавания нот из PDF ----------
+function showOmrReport() {
+  const r = P.song && P.song.omrReport; if (!r) return;
+  const box = $('omrBody'); box.innerHTML = '';
+  const add = (t, cls) => { const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = t; box.appendChild(d); return d; };
+  const sure = r.notes - r.unsure;
+  add(`Страниц: ${r.pages} · систем: ${r.systems} · станов в системе: ${r.staves} · тактов: ${r.measures}`);
+  add(`Нот распознано: ${r.notes}. Уверенно: ${sure} (${r.notes ? Math.round(sure / r.notes * 100) : 0}%), требуют проверки: ${r.unsure}.`, 'omr-big');
+  add(r.musicFont ? 'Знаки взяты из нотного шрифта PDF (точно), линии, штили и ребра — по изображению страницы.' : 'Нотного шрифта в PDF нет — все знаки распознаны по изображению страницы; точность ниже.', 'muted small');
+  add('Дорожки: ' + P.song.tracks.map(t => `${t.name} (${KIND_LABEL[t.kind]}, ${t.notes.length} нот)`).join('; '), 'muted small');
+  for (const p of r.problems || []) add('⚠ ' + p, 'omr-warn');
+  const um = r.unsureMeasures || [];
+  if (um.length) {
+    add('Такты, где ритм не сошёлся с размером (ноты поставлены по положению на строке — проверьте):', 'lbl');
+    const wrap = document.createElement('div'); wrap.className = 'tchips';
+    const seen = new Set();
+    for (const u of um) {
+      const k = u.n + ':' + u.track; if (seen.has(k)) continue; seen.add(k);
+      const b = document.createElement('button'); b.className = 'chip'; b.textContent = `Такт ${u.n} · ${u.track}`; b.title = u.why;
+      b.onclick = () => { $('omrSheet').classList.remove('on'); gotoMeasure(u.n - 1); setMode('pdf'); setTimeout(() => pdfView.scrollToBar(u.n), 400); };
+      wrap.appendChild(b);
+    }
+    box.appendChild(wrap);
+  } else add('Ритм во всех тактах сошёлся с размером.', 'muted small');
+  add('В режиме «Оригинал» рядом со страницей — клавиатура. Рамки: синие — уверенно, оранжевые — проверить, зелёные — исправлено. Нажмите на рамку, чтобы исправить высоту или удалить ноту.', 'muted small');
+  $('omrSheet').classList.add('on');
+}
+$('omrCheck').onclick = () => { $('omrSheet').classList.remove('on'); setMode('pdf'); };
+$('omrBtn').onclick = () => { $('sheet').classList.remove('on'); showOmrReport(); };

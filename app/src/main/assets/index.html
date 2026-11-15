@@ -132,7 +132,7 @@
   <div class="sheet-body">
     <div class="sheet-head"><b>Настройки</b><button class="icon" data-close>✕</button></div>
 
-    <div class="row btns"><button id="soundBtn" class="chip on">🎚 Звуки и инструменты</button><button id="diagBtn" class="chip">Диагностика и тесты</button></div>
+    <div class="row btns"><button id="soundBtn" class="chip on">🎚 Звуки и инструменты</button><button id="diagBtn" class="chip">Диагностика и тесты</button><button id="omrBtn" class="chip">Отчёт распознавания</button></div>
 
     <label class="lbl">Скорость</label>
     <div class="seg" id="speedSeg"></div>
@@ -207,6 +207,10 @@
     <select id="edString"></select>
     <label class="lbl">Лад</label>
     <div class="row gap"><input type="number" id="edFret" min="0" max="30" inputmode="numeric"><span id="edNote" class="muted"></span></div>
+    <div id="edPitchRow" style="display:none">
+      <label class="lbl">Высота: <b id="edPitch"></b></label>
+      <div class="row gap"><button id="edOctDn" class="chip">− октава</button><button id="edDn" class="chip">− ½ тона</button><button id="edUp" class="chip">+ ½ тона</button><button id="edOctUp" class="chip">+ октава</button></div>
+    </div>
     <label class="lbl">Длительность</label>
     <select id="edDur">
       <option value="4">целая</option><option value="2">половинная</option><option value="1">четверть</option>
@@ -214,9 +218,18 @@
     </select>
     <div class="row gap" style="margin-top:16px">
       <button id="edSave" class="primary">Сохранить</button>
+      <button id="edOk">Верно</button>
       <button id="edListen">Послушать</button>
       <button id="edDel" class="danger">Удалить ноту</button>
     </div>
+  </div>
+</div>
+
+<div id="omrSheet" class="sheet">
+  <div class="sheet-body tall">
+    <div class="sheet-head"><b>Результат распознавания нот</b><button class="icon" data-close>✕</button></div>
+    <div id="omrBody" class="omr-body"></div>
+    <div class="row gap" style="margin-top:14px"><button id="omrCheck" class="primary">Сверить с оригиналом</button><button data-close>Готово</button></div>
   </div>
 </div>
 

@@ -196,3 +196,10 @@ input[type=number].sm{width:70px}
 .sl{display:grid;grid-template-columns:92px 1fr 42px;align-items:center;gap:8px;font-size:13px}
 .sl input{width:100%}
 .dtab{width:100%;border-collapse:collapse;font-size:12px}.dtab td{padding:3px 4px;border-bottom:1px solid var(--line)}
+
+#player.split #pdfWrap{bottom:42%!important;height:auto}
+#player.split #cv{top:58%!important;height:42%!important}
+.nbox.unsure{border-color:#ffb02e;background:rgba(255,176,46,.18)}
+.nbox .nl{position:absolute;left:100%;top:-3px;font:600 9px/1 system-ui;color:#2a6fd6;white-space:nowrap;padding-left:1px;pointer-events:none}
+.nbox.unsure .nl{color:#c77700}
+.omr-body>div{margin:6px 0}.omr-big{font-weight:600}.omr-warn{color:#ffb02e}
