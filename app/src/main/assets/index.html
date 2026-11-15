@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>NotyViz</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section id="home" class="screen on">
+  <header class="top">
+    <div class="logo"><span class="k1"></span><span class="k2"></span><span class="k1"></span></div>
+    <div><h1>NotyViz</h1><p class="muted">Табы → клавиатура с падающими нотами</p></div>
+  </header>
+  <button id="importBtn" class="primary big">Открыть PDF</button>
+  <p class="muted small">Подходят PDF-табулатуры из Songsterr. Файл можно также открыть из «Загрузок» или через «Поделиться» → NotyViz.</p>
+  <h2 class="sec">Последние</h2>
+  <div id="recent"></div>
+  <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden>
+</section>
+
+<section id="player" class="screen">
+  <header class="pbar">
+    <button id="backBtn" class="icon" aria-label="Назад">‹</button>
+    <div class="ptitle"><div id="pTitle"></div><div id="pSub" class="muted small"></div></div>
+    <button id="listBtn" class="icon" aria-label="Ноты по тактам">☰</button>
+    <button id="setBtn" class="icon" aria-label="Настройки">⚙</button>
+  </header>
+  <div id="stage"><canvas id="cv"></canvas></div>
+  <div class="ctrl">
+    <div class="row">
+      <span id="posLbl" class="pos">Такт 1</span>
+      <input type="range" id="seek" min="0" max="1000" step="1" value="0">
+      <span id="timeLbl" class="pos right">0:00</span>
+    </div>
+    <div class="row btns">
+      <button id="prevBtn" class="icon" aria-label="Такт назад">⏮</button>
+      <button id="playBtn" class="play" aria-label="Играть">▶</button>
+      <button id="nextBtn" class="icon" aria-label="Такт вперёд">⏭</button>
+      <button id="speedBtn" class="chip">100%</button>
+      <button id="loopBtn" class="chip">Повтор</button>
+      <button id="metroBtn" class="chip">Метроном</button>
+    </div>
+  </div>
+</section>
+
+<div id="sheet" class="sheet">
+  <div class="sheet-body">
+    <div class="sheet-head"><b>Настройки</b><button class="icon" data-close>✕</button></div>
+
+    <label class="lbl">Скорость</label>
+    <div class="seg" id="speedSeg"></div>
+
+    <label class="lbl">Повтор фрагмента (такты)</label>
+    <div class="row gap">
+      <input type="number" id="loopFrom" inputmode="numeric"> <span>—</span>
+      <input type="number" id="loopTo" inputmode="numeric">
+      <button id="loopSet" class="chip">Включить</button>
+    </div>
+
+    <label class="lbl">Руки</label>
+    <div class="row gap">
+      <select id="handMode">
+        <option value="split">Делить по высоте</option>
+        <option value="right">Всё — правая рука</option>
+      </select>
+      <span class="muted small">граница</span>
+      <select id="splitSel"></select>
+    </div>
+
+    <label class="lbl">Октава</label>
+    <div class="seg" id="octSeg"></div>
+
+    <label class="lbl">Громкость</label>
+    <input type="range" id="vol" min="0" max="100" value="80">
+
+    <label class="row check"><input type="checkbox" id="names" checked> Названия нот на клавишах</label>
+    <label class="row check"><input type="checkbox" id="fullKb"> Вся клавиатура (88 клавиш)</label>
+
+    <div id="info" class="muted small info"></div>
+  </div>
+</div>
+
+<div id="listSheet" class="sheet">
+  <div class="sheet-body tall">
+    <div class="sheet-head"><b>Распознанные ноты</b><button class="icon" data-close>✕</button></div>
+    <p class="muted small">Нажмите на такт, чтобы перейти к нему.</p>
+    <div id="mList"></div>
+  </div>
+</div>
+
+<div id="busy" class="busy"><div class="spin"></div><div id="busyTxt">Разбираю PDF…</div></div>
+<div id="toast" class="toast"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
