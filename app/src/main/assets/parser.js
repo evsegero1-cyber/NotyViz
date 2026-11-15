@@ -398,7 +398,7 @@ const DRUM_MAP = {
 export function drumNote(kind, step) {
   const m = DRUM_MAP[kind] || DRUM_MAP.head;
   if (m[step] != null) return m[step];
-  return kind === 'head' ? 38 : kind === 'xcirc' ? 46 : 42;
+  return null; // положение на стане не соответствует ни одному элементу установки — не угадываем
 }
 
 export function buildSong(systems, meta) {
@@ -538,13 +538,15 @@ export function buildSong(systems, meta) {
     }
     outNotes.push(n);
   }
-  const clean = outNotes.map(n => ({ midi: n.midi, start: +n.start.toFixed(4), dur: +n.dur.toFixed(4), string: n.string, fret: n.fret, measure: n.measure, voice: n.gray ? 1 : 0,
+  // ударные: головки в положении, которому нет элемента установки, не озвучиваем — показываем для проверки
+  const unknown = isDrum ? outNotes.filter(n => n.midi == null).map(n => ({ start: +n.start.toFixed(4), measure: n.measure, page: n.sy.page, head: n.src.head, step: n.src.step, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)) })) : [];
+  const clean = outNotes.filter(n => n.midi != null).map(n => ({ midi: n.midi, start: +n.start.toFixed(4), dur: +n.dur.toFixed(4), string: n.string, fret: n.fret, measure: n.measure, voice: n.gray ? 1 : 0,
     page: n.sy.page, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)),
     ...(n.x2 && Object.keys(n.x2).length ? { x: n.x2 } : {}), ...(n.hand ? { hand: n.hand } : {}) }));
   return {
     title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
     measures: ms.map(m => ({ n: m.n, start: m.start, len: m.len, tempo: m.tempo, sig: m.sig })),
-    totalBeats: total, notes: clean
+    totalBeats: total, notes: clean, unknown
   };
 }

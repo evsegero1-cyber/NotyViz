@@ -1,0 +1,17 @@
+Звуковые библиотеки NotyViz
+
+piano/  — Salamander Grand Piano V3 (Yamaha C5), Alexander Holm; ретюн Markus Fiedler; SFZ — kinwie.
+          Лицензия CC-BY 3.0. https://github.com/sfzinstruments/SalamanderGrandPiano
+          (в приложении: 30 нот × 5 слоёв громкости, укороченные хвосты, Ogg Vorbis)
+egtr/   — Emilyguitar (Epiphone «Emily the Strange», запись в линию), Karoryfer Lecolds / D. Smolken. CC0 1.0.
+          https://github.com/sfzinstruments/karoryfer.emilyguitar
+bass/   — Growlybass (Squier Jazz Bass, запись в линию), Karoryfer Lecolds. CC0 1.0.
+          https://github.com/sfzinstruments/karoryfer.growlybass
+agtr/   — Martin acoustic guitar (Discord SFZ GM Bank), Jeff Learman. CC0 1.0.
+rhodes/ — jRhodes3c (Discord SFZ GM Bank), Jeff Learman. CC0 1.0.
+          https://github.com/sfzinstruments/Discord-SFZ-GM-Bank
+kit/    — Virtuosity Drums (Virtuosity Musical Instruments, барабанщик Austin McMahon). CC0 1.0.
+          Премикс микрофонов бочки, малого и оверхедов. https://github.com/sfzinstruments/virtuosity_drums
+gm/     — GeneralUser GS v2.0, S. Christian Collins. GeneralUser GS License v2.0
+          (разрешено использование и распространение, в том числе в приложениях).
+          https://github.com/mrbumpy409/GeneralUser-GS

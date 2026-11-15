@@ -6,6 +6,7 @@ import { importScore } from './import-gp.js';
 import { makeTime, fromBeatSong, songSummary, KIND_LABEL, isStringKind, PPQ, GM_NAMES, GM_GROUPS } from './model.js';
 import { perform, TECH, techIds } from './techniques.js';
 import { Engine } from './engine.js';
+import { TIMBRES, TIMBRE, timbreFor, defaultTimbre, GROUP_LABEL, FX_PRESETS, FX_FOR_GROUP, GM_DRUMS } from './audio.js';
 import { PianoView, GuitarView, DrumView, DRUM_NAMES, drumGroup, HAND, TRACK_COLORS } from './views.js';
 import { PdfView } from './pdfview.js';
 import { idb, ls } from './store.js';
@@ -26,12 +27,13 @@ function busy(on, t) { $('busy').classList.toggle('on', on); if (t) $('busyTxt')
 
 // ---------- Звук ----------
 const engine = new Engine(alphaTab, $('at'), ev => {
-  if (ev === 'sound' || ev === 'ready') $('soundState').textContent = '';
+  if (ev === 'sound' || ev === 'ready') { $('soundState').textContent = ''; busySnd(false); }
+  if (ev === 'loading') busySnd(true);
   if (ev === 'play' || ev === 'pause') { $('playBtn').textContent = $('lPlay').textContent = engine.playing ? '❚❚' : '▶'; if (A && A.setKeepOn) A.setKeepOn(engine.playing); }
   if (ev === 'finished' && !P.loop) { engine.seekTick(0); }
   if (ev === 'midi') applyEngineSettings();
 });
-$('soundState').textContent = 'Загружаю звуки инструментов…';
+function busySnd(on) { const e = $('posLbl'); if (!e) return; e.classList.toggle('loading', on); if (on) e.textContent = 'Загружаю семплы…'; }
 
 // ---------- Главный экран ----------
 async function renderRecent() {
@@ -136,7 +138,7 @@ async function openSong(id) {
   const set = ls.get('nv-set-' + id, {});
   const tracks = song.tracks;
   P.oct = set.oct || 0; P.split = set.split || 60; P.handMode = set.handMode || 'auto';
-  P.mute = set.mute || {}; P.prog = set.prog || {};
+  P.mute = set.mute || {}; P.prog = set.prog || {}; P.sound = set.sound || {};
   P.show = set.show || tracks.map((t, i) => i).filter(i => tracks[i].kind !== 'drums' && (tracks[i].kind === 'piano' || tracks.length <= 2 || !tracks.some(x => x.kind === 'piano')));
   if (!P.show.length) P.show = tracks.map((t, i) => i).filter(i => tracks[i].kind !== 'drums').slice(0, 1);
   const fretIdx = tracks.findIndex(t => t.tuning && isStringKind(t.kind));
@@ -146,7 +148,7 @@ async function openSong(id) {
   P.dTrack = set.dTrack != null ? set.dTrack : tracks.findIndex(t => t.kind === 'drums');
   const onlyDrums = tracks.every(t => t.kind === 'drums');
   P.mode = set.mode || (onlyDrums ? 'drums' : firstStringed ? 'fret' : 'keys');
-  engine.prog = P.prog;
+  engine.prog = P.prog; engine.sound = P.sound; engine.channelState = { mute: P.mute, oct: P.oct };
   engine.load(song, P.time, song.source === 'gp' ? P.raw : null);
   prepare();
   $('pTitle').textContent = song.title;
@@ -163,10 +165,10 @@ async function openSong(id) {
 }
 function saveSet() {
   if (!P.song) return;
-  ls.set('nv-set-' + P.song.id, { oct: P.oct, split: P.split, handMode: P.handMode, mode: P.mode, show: P.show, mute: P.mute, gTrack: P.gTrack, dTrack: P.dTrack, prog: P.prog });
+  ls.set('nv-set-' + P.song.id, { oct: P.oct, split: P.split, handMode: P.handMode, mode: P.mode, show: P.show, mute: P.mute, gTrack: P.gTrack, dTrack: P.dTrack, prog: P.prog, sound: P.sound });
 }
 function firstNoteSec() {
-  let m = 1e9; for (const i of P.show) { const n = P.song.tracks[i] && P.song.tracks[i].notes.find(n => !n.deleted); if (n) m = Math.min(m, P.time.toSec(n.t)); }
+  let m = 1e9; for (const i of (P.show.length ? P.show : P.song.tracks.map((t, k) => k))) { const n = P.song.tracks[i] && P.song.tracks[i].notes.find(n => !n.deleted); if (n) m = Math.min(m, P.time.toSec(n.t)); }
   return m === 1e9 ? 0 : m;
 }
 function applyEngineSettings() {
@@ -322,6 +324,8 @@ function frame() {
     if (P.mode === 'keys') piano.draw(g, W, H, { ...ctx, notes: P.keysNotes, land: P.land, pressed: P.pressed, pedal: P.pedal });
     else if (P.mode === 'drums') drumsView.draw(g, W, H, { ...ctx, notes: P.drumNotes, pressed: P.pressedPads });
     else { const tr = P.song.tracks[P.gTrack]; guitar.draw(g, W, H, { ...ctx, notes: P.fretNotes, tuningNames: tuningLabels(tr), bends: P.gBends }); }
+  } else if (P.mode === 'score') {
+    engine.syncScore();
   } else if (P.mode === 'pdf') {
     const act = new Set();
     const L = P.song.tracks[0].kind === 'drums' ? P.drumNotes : P.fretNotes;
@@ -331,7 +335,7 @@ function frame() {
   const now = performance.now();
   if (now - lastUi > 150) {
     lastUi = now;
-    $('posLbl').textContent = 'Такт ' + P.song.measures[mi].n;
+    if (!engine.loading) $('posLbl').textContent = 'Такт ' + P.song.measures[mi].n;
     $('timeLbl').textContent = fmt(t);
     if (!seeking) $('seek').value = Math.round(t / Math.max(0.1, P.time.total) * 1000);
     if (P.land) { $('lPos').textContent = 'Такт ' + P.song.measures[mi].n; $('landProg').firstChild.style.width = (t / Math.max(0.1, P.time.total) * 100) + '%'; }
@@ -403,7 +407,7 @@ cv.addEventListener('pointerdown', e => {
     if (m != null) {
       try { cv.setPointerCapture(e.pointerId); } catch (er) { }
       touchKey.set(e.pointerId, m); P.pressed.add(m);
-      engine.previewNote(m, 0);
+      engine.previewNote(m, 0, false, curTimbre(P.show[0] || 0));
       if (!P.land) toast(noteName(m));
       return;
     }
@@ -520,21 +524,7 @@ function fillTracks() {
     snd.onclick = () => { P.mute[i] = !P.mute[i]; saveSet(); engine.setChannels({ mute: P.mute, oct: P.oct }); fillTracks(); };
     const btns = document.createElement('div'); btns.className = 'tbtns'; btns.append(showBtn, snd);
     const top = document.createElement('div'); top.className = 'trow-top'; top.append(dot, info, btns);
-    const sel = document.createElement('select'); sel.className = 'progSel';
-    if (tr.kind === 'drums') { const o = document.createElement('option'); o.textContent = 'Ударная установка'; sel.appendChild(o); sel.disabled = true; }
-    else {
-      GM_GROUPS.forEach((gname, gi) => {
-        const og = document.createElement('optgroup'); og.label = gname;
-        for (let p = gi * 8; p < gi * 8 + 8; p++) { const o = document.createElement('option'); o.value = p; o.textContent = GM_NAMES[p] + (p === (tr.program || 0) ? ' — как в файле' : ''); og.appendChild(o); }
-        sel.appendChild(og);
-      });
-      sel.value = P.prog[i] != null ? P.prog[i] : (tr.program || 0);
-      sel.onchange = () => {
-        const v = +sel.value;
-        if (v === (tr.program || 0)) delete P.prog[i]; else P.prog[i] = v;
-        saveSet(); const wasPlaying = engine.playing; engine.setPrograms(P.prog); if (!wasPlaying) setTimeout(() => engine.previewNote(60, v), 300); toast('Звучание: ' + GM_NAMES[v]);
-      };
-    }
+    const sel = timbreSelect(tr, i, id => setTimbre(i, id, true)); sel.className = 'progSel';
     const lab = document.createElement('label'); lab.className = 'muted small proglab'; lab.textContent = 'Звучит как';
     const progRow = document.createElement('div'); progRow.className = 'trow-prog'; progRow.append(lab, sel);
     row.append(top, progRow); box.appendChild(row);
@@ -602,7 +592,7 @@ function openEdit(i) {
 }
 function updEdNote() { const tr = P.song.tracks[0]; if (tr.kind === 'drums') { $('edNote').textContent = ''; return; } const m = tr.tuning[+$('edString').value] + (+$('edFret').value || 0); $('edNote').textContent = '→ ' + noteName(m); }
 $('edString').onchange = updEdNote; $('edFret').oninput = updEdNote;
-$('edListen').onclick = () => { const tr = P.song.tracks[0]; if (tr.kind === 'drums') { engine.previewNote(+$('edString').value, 0, true); return; } engine.previewNote(tr.tuning[+$('edString').value] + (+$('edFret').value || 0) + 12 * P.oct, tr.program || 0); };
+$('edListen').onclick = () => { const tr = P.song.tracks[0]; if (tr.kind === 'drums') { engine.previewNote(+$('edString').value, 0, true); return; } engine.previewNote(tr.tuning[+$('edString').value] + (+$('edFret').value || 0) + 12 * P.oct, tr.program || 0, false, curTimbre(0)); };
 async function saveEdit(del) {
   const tr = P.song.tracks[0], n = tr.notes[editIdx]; if (!n) return;
   if (del) n.deleted = true;
@@ -813,7 +803,7 @@ $('mPlay').onclick = async () => {
     const song = buildMerged();
     if (wasDirty) {
       P.song = null;
-      engine.prog = {}; engine.channelState = {};
+      engine.prog = {}; engine.channelState = {}; engine.sound = {};
       engine.resume = true; engine.pendingTick = song.measures[Math.max(0, (song.tracks[0] && song.tracks[0].notes[0] ? measIdx(song, firstTick(song)) : 0))].tick;
       engine.load(song, MG.time, null);
       engine.pendingTick = engine.pendingTick || 0;
@@ -1013,3 +1003,165 @@ function techSummary(tr) {
   if (tr.pedal && tr.pedal.length) cnt.set('pedal', tr.pedal.length);
   return [...cnt.entries()].filter(([id]) => TECH[id]).sort((a, b) => b[1] - a[1]);
 }
+
+// ---------- Звуки и инструменты ----------
+function curTimbre(i) { const st = (P.sound.tracks || {})[i] || {}; return st.timbre || defaultTimbre(P.song.tracks[i], P.prog[i], P.song.source === 'gp' || P.song.source === 'midi'); }
+function timbreSelect(tr, i, onChange) {
+  const sel = document.createElement('select');
+  const cur = curTimbre(i), tb = timbreFor(cur);
+  const want = tr.kind === 'drums' ? 'drums' : tr.kind === 'piano' ? 'piano' : tr.kind === 'bass' ? 'bass' : isStringKind(tr.kind) ? 'guitar' : null;
+  const groups = ['piano', 'guitar', 'bass', 'drums'].sort((a, b) => (b === want) - (a === want));
+  for (const gr of groups) {
+    if (tr.kind === 'drums' && gr !== 'drums') continue;
+    if (tr.kind !== 'drums' && gr === 'drums') continue;
+    const og = document.createElement('optgroup'); og.label = GROUP_LABEL[gr];
+    for (const t of TIMBRES.filter(t => t.group === gr)) { const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; og.appendChild(o); }
+    sel.appendChild(og);
+  }
+  if (tr.kind !== 'drums') GM_GROUPS.forEach((gname, gi) => {
+    const og = document.createElement('optgroup'); og.label = 'GM: ' + gname;
+    for (let p = gi * 8; p < gi * 8 + 8; p++) { const o = document.createElement('option'); o.value = 'gm:' + p; o.textContent = GM_NAMES[p] + (p === (tr.program || 0) ? ' — как в файле' : ''); og.appendChild(o); }
+    sel.appendChild(og);
+  });
+  sel.value = cur; if (sel.value !== cur) { const o = document.createElement('option'); o.value = cur; o.textContent = tb.name; sel.prepend(o); sel.value = cur; }
+  sel.onchange = () => onChange(sel.value);
+  return sel;
+}
+function sndTrack(i) { P.sound.tracks = P.sound.tracks || {}; return P.sound.tracks[i] = P.sound.tracks[i] || {}; }
+function setTimbre(i, id, preview) {
+  const st = sndTrack(i); st.timbre = id; delete st.fx; delete st.fxParams;
+  saveSet(); engine.setSound(P.sound);
+  toast('Звучание: ' + timbreFor(id).name);
+  if (preview && !engine.playing) setTimeout(() => sampleTrack(i), 400);
+}
+// Образец: 5 секунд этой дорожки соло (с текущего места, если в нём есть её ноты, иначе — с её первой ноты)
+let sampleTimer = null;
+function sampleTrack(i) {
+  const tr = P.song.tracks[i]; if (!tr) return;
+  if (engine.loading) { setTimeout(() => sampleTrack(i), 300); return; }
+  const now = engine.nowTick();
+  const n = tr.notes.find(n => !n.deleted && n.t >= now - 1) || tr.notes.find(n => !n.deleted); if (!n) return;
+  clearTimeout(sampleTimer);
+  const back = { tick: now, solo: null };
+  engine.setChannels({ mute: {}, oct: P.oct, solo: i });
+  engine.seekTick(n.t); engine.play();
+  sampleTimer = setTimeout(() => { engine.pause(); engine.setChannels({ mute: P.mute, oct: P.oct }); engine.seekTick(back.tick); }, 5000);
+}
+$('soundBtn').onclick = () => { $('sheet').classList.remove('on'); fillSound(); $('soundSheet').classList.add('on'); };
+const FX_KNOBS = [['vol', 'Громкость', 0, 1.5, 0.01, 1], ['drive', 'Перегруз', 0, 1, 0.01], ['low', 'Низ, дБ', -12, 12, 0.5], ['mid', 'Середина, дБ', -12, 12, 0.5], ['high', 'Верх, дБ', -12, 12, 0.5], ['chorus', 'Хорус', 0, 1, 0.01], ['delay', 'Дилей', 0, 0.8, 0.01], ['delayTime', 'Время дилея, с', 0.08, 1, 0.01], ['reverb', 'Реверб', 0, 0.8, 0.01]];
+function fillSound() {
+  const q = P.sound.quality || engine.audio.quality || 'high';
+  for (const b of $('qualSeg').children) { b.classList.toggle('on', b.dataset.q === q); b.onclick = () => { P.sound.quality = b.dataset.q; saveSet(); engine.setSound(P.sound); fillSound(); }; }
+  $('qualInfo').textContent = q === 'eco' ? 'Моно, упрощённые эффекты: вдвое меньше памяти — для слабых телефонов.' : 'Стерео, все слои громкости и эффекты.';
+  $('revOn').checked = P.sound.reverb !== false;
+  $('revOn').onchange = e => { P.sound.reverb = e.target.checked; saveSet(); engine.audio.setReverb(e.target.checked); };
+  const box = $('sndList'); box.innerHTML = '';
+  P.song.tracks.forEach((tr, i) => {
+    const st = sndTrack(i), tb = timbreFor(curTimbre(i));
+    const c = document.createElement('div'); c.className = 'scard';
+    const hd = document.createElement('div'); hd.className = 'hd';
+    const dot = document.createElement('span'); dot.className = 'dot'; dot.style.cssText = `width:12px;height:12px;border-radius:3px;background:${TRACK_COLORS[i % TRACK_COLORS.length]}`;
+    const nm = document.createElement('b'); nm.textContent = tr.name + ' · ' + KIND_LABEL[tr.kind];
+    const play = document.createElement('button'); play.className = 'chip'; play.textContent = '▶ Образец'; play.onclick = () => sampleTrack(i);
+    hd.append(dot, nm, play); c.appendChild(hd);
+    c.appendChild(timbreSelect(tr, i, id => { setTimbre(i, id, true); setTimeout(fillSound, 50); }));
+    const presets = FX_FOR_GROUP[tb.group] || FX_FOR_GROUP.gm;
+    const curP = st.fx || tb.fx || (tb.group === 'piano' ? 'piano' : 'none');
+    const ps = document.createElement('select');
+    for (const id of [...new Set([curP, ...presets])]) { const o = document.createElement('option'); o.value = id; o.textContent = 'Обработка: ' + FX_PRESETS[id].label; ps.appendChild(o); }
+    ps.value = curP;
+    ps.onchange = () => { st.fx = ps.value; st.fxParams = {}; saveSet(); engine.audio.setFx(i, { preset: st.fx }); fillSound(); };
+    c.appendChild(ps);
+    const base = Object.assign({}, FX_PRESETS[curP], st.fxParams || {});
+    for (const [k, label, mn, mx, step, dflt] of FX_KNOBS) {
+      const amp = FX_PRESETS[curP].amp;
+      if (k === 'drive' && !amp) continue;
+      if ((k === 'chorus' || k === 'delay' || k === 'delayTime') && (tb.group === 'drums' || tb.group === 'bass')) continue;
+      if (k === 'delayTime' && !(base.delay > 0)) continue;
+      const row = document.createElement('div'); row.className = 'sl';
+      const l = document.createElement('span'); l.textContent = label;
+      const r = document.createElement('input'); r.type = 'range'; r.min = mn; r.max = mx; r.step = step;
+      const v = k === 'vol' ? (st.vol != null ? st.vol : 1) : (base[k] != null ? base[k] : 0); r.value = v;
+      const o = document.createElement('span'); o.className = 'muted small';
+      const fmtv = x => k === 'vol' || k === 'drive' || k === 'chorus' || k === 'delay' || k === 'reverb' ? Math.round(x * 100) + '%' : (+x).toFixed(k === 'delayTime' ? 2 : 1);
+      o.textContent = fmtv(v);
+      r.oninput = () => {
+        const x = +r.value; o.textContent = fmtv(x);
+        if (k === 'vol') { st.vol = x; applySoundVol(); }
+        else { st.fxParams = st.fxParams || {}; st.fxParams[k] = x; engine.audio.setFx(i, Object.assign({ preset: curP }, st.fxParams)); }
+      };
+      r.onchange = () => { saveSet(); if (k === 'delay') fillSound(); };
+      row.append(l, r, o); c.appendChild(row);
+    }
+    box.appendChild(c);
+  });
+  $('sndCredits').textContent = 'Семплы: Salamander Grand Piano (A. Holm, CC-BY 3.0), Emilyguitar и Growlybass (Karoryfer, CC0), Martin acoustic и jRhodes3c (J. Learman, CC0), Virtuosity Drums (CC0), GeneralUser GS (S. C. Collins). Подробнее — в «Диагностике».';
+}
+function applySoundVol() {
+  const t = P.sound.tracks || {};
+  P.song.tracks.forEach((tr, i) => { const a = engine.audio.trackState[i]; if (a) a.vol = (tr.volume != null ? tr.volume : 1) * ((t[i] && t[i].vol != null) ? t[i].vol : 1); });
+  engine.audio.applyMix();
+}
+
+// ---------- Диагностика ----------
+let diagFrom = 'player';
+$('diagBtn').onclick = () => { $('sheet').classList.remove('on'); diagFrom = 'player'; show('diag'); };
+$('diagBack').onclick = () => { show(diagFrom); if (diagFrom === 'player') setMode(P.mode, true); };
+$('diagPlay').onclick = () => { if (engine.playing) engine.pause(); else engine.play(); };
+function diagLive() {
+  if (!$('diag').classList.contains('on')) return;
+  const au = engine.audio, ctx = au.ctx, s = P.song;
+  const L = [];
+  if (!s) { $('diagLive').textContent = 'Откройте композицию.'; return; }
+  const sec = au.nowSec(), tick = P.time.toTick(sec), mi = P.time.measureAtSec(sec), m = s.measures[mi];
+  const beatT = PPQ * 4 / m.sig[1], beat = Math.floor((tick - m.tick) / beatT) + 1;
+  L.push(`Музыкальное время: такт ${m.n}, доля ${beat}/${m.sig[0]} · ${sec.toFixed(3)} с · тик ${Math.round(tick)} (PPQ ${PPQ})`);
+  L.push(`Темп: ${P.time.bpmAt(tick).toFixed(1)} BPM × скорость ${Math.round(engine.speed * 100)}% · смен темпа в композиции: ${Math.max(0, (s.tempos || []).length - 1)}`);
+  if (ctx) {
+    const heard = au.heardCtxTime(), lat = (ctx.currentTime - heard);
+    L.push(`Мастер-часы AudioContext: ${ctx.currentTime.toFixed(3)} с · ${ctx.state} · ${ctx.sampleRate} Гц`);
+    L.push(`Задержка вывода звука: ${(lat * 1000).toFixed(0)} мс (base ${((ctx.baseLatency || 0) * 1000).toFixed(0)}, output ${((ctx.outputLatency || 0) * 1000).toFixed(0)}) — картинка показывает то, что слышно сейчас`);
+    if (au.playing) {
+      const schedSec = au.songSecAt(ctx.currentTime);
+      L.push(`Расхождение картинка ↔ звук из динамика: ${((au.songSecAt(heard) - sec) * 1000).toFixed(1)} мс (ожидается 0)`);
+      L.push(`Планировщик впереди звука на ${((schedSec - sec) * 1000).toFixed(0)} мс + окно ${Math.round(au.LOOK * 1000)} мс`);
+    }
+  }
+  const st = au.stats;
+  const pending = ctx ? [...au.voices].filter(v => v.start > ctx.currentTime).length : 0;
+  L.push(`Запланировано нот: ${st.scheduled} · в очереди: ${pending} · звучит голосов: ${au.voices.size} (пик ${st.voicesPeak})`);
+  L.push(`Опоздавших при планировании: ${st.late}${st.late ? `, максимум ${st.maxLateMs.toFixed(1)} мс` : ''} · повторно запланированных: ${st.dupes}`);
+  L.push(`Память семплов: ${au.bank ? (au.bank.bytes / 1048576).toFixed(0) : 0} МБ · качество: ${au.quality === 'eco' ? 'экономное' : 'высокое'}`);
+  L.push('');
+  L.push('Дорожки (все на одних часах):');
+  s.tracks.forEach((tr, i) => {
+    const p = st.perTrack[i] || {}; const voices = [...au.voices].filter(v => v.tr === i).length;
+    const ts = au.trackState[i] || {};
+    L.push(` ${i + 1}. ${tr.name} — ${p.timbre || '…'}${tr.kind === 'drums' ? ' · канал MIDI 10 (индекс 9)' : ''}`);
+    L.push(`    нот ${p.count || 0}, запланировано ${p.scheduled || 0}, звучит ${voices}, последняя нота ${p.lastSec != null ? p.lastSec.toFixed(2) : '—'} с (мастер ${sec.toFixed(2)} с), опозданий ${p.late || 0}${ts.mute ? ' · выключена' : ''}${ts.solo ? ' · соло' : ''}`);
+  });
+  if (st.lastDrum) { const d = st.lastDrum; L.push(''); L.push(`Ударные, последний удар: канал ${d.ch}, нота ${d.m} — ${d.name} · звук: ${d.ok ? d.src : 'НЕТ (элемент неизвестен, не подменяется)'}`); }
+  if (st.unknownDrums) L.push(`Ударов без звука (неизвестный номер): ${st.unknownDrums}`);
+  $('diagLive').textContent = L.join('\n');
+  $('diagSub').textContent = s.title;
+}
+setInterval(diagLive, 200);
+$('diagRun').onclick = async () => {
+  const box = $('diagTests'); box.innerHTML = '<p class="muted">Идут тесты: планирование, ударные, рендер звука…</p>';
+  if (engine.playing) engine.pause();
+  try {
+    const { runAll } = await import('./selftest.js');
+    const r = await runAll(p => { box.firstChild.textContent = p; });
+    box.innerHTML = '';
+    const okN = r.results.filter(x => x.ok).length;
+    const h = document.createElement('p'); h.innerHTML = `<b>${okN} из ${r.results.length} тестов пройдено</b>`; box.appendChild(h);
+    for (const t of r.results) { const d = document.createElement('div'); d.className = 'tres'; d.innerHTML = `<b class="${t.ok ? 'ok' : 'bad'}"></b><span class="muted small"></span>`; d.firstChild.textContent = (t.ok ? '✓ ' : '✗ ') + t.id + '. ' + t.name; d.lastChild.textContent = t.detail; box.appendChild(d); }
+    const tb = document.createElement('table'); tb.className = 'dtab';
+    tb.innerHTML = '<tr><td><b>№</b></td><td><b>Элемент (GM, канал 10)</b></td><td><b>Звук</b></td><td><b>Слоёв</b></td></tr>';
+    for (const d of r.drums) { const tr = document.createElement('tr'); for (const v of [d.m, d.name, d.src, d.layers]) { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); } tb.appendChild(tr); }
+    const cap = document.createElement('p'); cap.className = 'muted small'; cap.textContent = 'Раскладка ударных General MIDI и источник каждого звука:';
+    box.append(cap, tb);
+  } catch (e) { box.textContent = 'Ошибка тестов: ' + (e.message || e); }
+};
+
+window.__nv = { engine, P };

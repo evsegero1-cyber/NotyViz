@@ -185,3 +185,14 @@ input[type=number].sm{width:70px}
 .a-s1{animation:key 1.2s infinite}.a-s2{animation:key 1.2s .15s infinite}.a-s3{animation:key 1.2s .3s infinite}.a-s4{animation:key 1.2s .45s infinite}
 .a-grace{animation:stacc 1.2s infinite;width:12px!important}.a-pedal{animation:pedal 2s infinite}
 .a-cresc{clip-path:polygon(0 50%,100% 0,100% 100%);animation:mute 2s infinite}.a-dim{clip-path:polygon(0 0,100% 50%,0 100%);animation:mute 2s infinite}
+
+.diag-body{padding:8px 14px 30px;overflow-y:auto;flex:1}
+.diag-pre{font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px;margin:10px 0}
+.tres{padding:8px 2px;border-bottom:1px solid var(--line)}
+.tres b{display:block}.tres .ok{color:#5fd38d}.tres .bad{color:#ff6b6b}
+.scard{border:1px solid var(--line);border-radius:12px;padding:10px;margin:10px 0;display:flex;flex-direction:column;gap:8px}
+.scard .hd{display:flex;align-items:center;gap:8px}.scard .hd b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scard select{width:100%}
+.sl{display:grid;grid-template-columns:92px 1fr 42px;align-items:center;gap:8px;font-size:13px}
+.sl input{width:100%}
+.dtab{width:100%;border-collapse:collapse;font-size:12px}.dtab td{padding:3px 4px;border-bottom:1px solid var(--line)}

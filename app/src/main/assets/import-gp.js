@@ -25,8 +25,11 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
   const perTrack = score.tracks.map(() => []);
   let total = 0;
   // Канал → дорожка партитуры
+  // Дорожка события — по номеру дорожки генератора (каналы у дорожек Guitar Pro могут совпадать:
+  // раньше ноты одной дорожки попадали в другую, и барабаны играли чужие ноты).
   const chTrack = new Map();
   score.tracks.forEach((t, i) => { chTrack.set(t.playbackInfo.primaryChannel, i); chTrack.set(t.playbackInfo.secondaryChannel, i); });
+  const trackOf = e => (e.track >= 0 && e.track < score.tracks.length) ? e.track : (chTrack.has(e.channel) ? chTrack.get(e.channel) : -1);
   // Подтяжки (pitch bend) и педаль по каналам — так их уже рассчитал alphaTab по партитуре
   const bendRange = new Map(), rpn = new Map(), chBends = new Map(), chPedal = new Map();
   for (const e of evs) {
@@ -34,13 +37,13 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
       const st = rpn.get(e.channel) || {}; rpn.set(e.channel, st);
       if (e.controller === 101) st.msb = e.value; else if (e.controller === 100) st.lsb = e.value;
       else if (e.controller === 6 && st.msb === 0 && st.lsb === 0) bendRange.set(e.channel, e.value);
-      else if (e.controller === 64) { if (!chPedal.has(e.channel)) chPedal.set(e.channel, []); chPedal.get(e.channel).push([T(e.tick), e.value >= 64]); }
+      else if (e.controller === 64) { const k = trackOf(e); if (!chPedal.has(k)) chPedal.set(k, []); chPedal.get(k).push([T(e.tick), e.value >= 64]); }
       continue;
     }
     if (e.constructor && e.constructor.name === 'PitchBendEvent' || (M.PitchBendEvent && e instanceof M.PitchBendEvent)) {
-      const range = bendRange.get(e.channel) || 2;
-      if (!chBends.has(e.channel)) chBends.set(e.channel, []);
-      const arr = chBends.get(e.channel), semi = +((e.value - 8192) / 8192 * range).toFixed(3);
+      const range = bendRange.get(e.channel) || 2, k = trackOf(e);
+      if (!chBends.has(k)) chBends.set(k, []);
+      const arr = chBends.get(k), semi = +((e.value - 8192) / 8192 * range).toFixed(3);
       if (!arr.length || arr[arr.length - 1][1] !== semi) arr.push([T(e.tick), semi]);
       continue;
     }
@@ -49,7 +52,7 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
     const type = e.type;
     if (e instanceof M.TempoChangeEvent) { tempos.push({ tick: T(e.tick), bpm: +(60000000 / e.microSecondsPerQuarterNote).toFixed(3) }); continue; }
     if (!(e instanceof M.NoteOnEvent || e instanceof M.NoteOffEvent)) continue;
-    const ti = chTrack.has(e.channel) ? chTrack.get(e.channel) : e.track;
+    const ti = trackOf(e);
     const key = ti + ':' + e.channel + ':' + e.noteKey;
     const on = e instanceof M.NoteOnEvent && e.noteVelocity > 0;
     if (on) {
@@ -77,7 +80,7 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
   // Струна и лад: ищем ноту партитуры в том же такте и доле
   const tracks = score.tracks.map((st, i) => {
     const staff = st.staves[0];
-    const isDrum = st.isPercussion || (staff && staff.isPercussion);
+    const isDrum = st.isPercussion || (staff && staff.isPercussion) || st.playbackInfo.primaryChannel === 9;
     const program = st.playbackInfo.program;
     let kind = kindFromProgram(program, isDrum, st.name);
     const tuning = staff && staff.tuning && staff.tuning.length ? Array.from(staff.tuning) : null;
@@ -91,9 +94,9 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
     mapScore(alphaTab, lookup, st, tr, notes, div, kind);
     for (const n of notes) { n.bar = barOf(measures, n.t); n.real = true; delete n.rawTick; }
     // кривая подтяжек канала (только если в ней есть что-то кроме нуля)
-    const bends = chBends.get(st.playbackInfo.primaryChannel) || [];
+    const bends = chBends.get(i) || [];
     if (bends.some(b => b[1] !== 0)) tr.bends = bends;
-    tr.pedal = pedalSegments(chPedal.get(st.playbackInfo.primaryChannel)) || pedalFromScore(lookup, st, T);
+    tr.pedal = pedalSegments(chPedal.get(i)) || pedalFromScore(lookup, st, T);
     if (!tr.pedal || !tr.pedal.length) delete tr.pedal;
     return tr;
   }).filter(t => t.notes.length);

@@ -10,8 +10,8 @@ android {
         applicationId 'ru.sergey.notyviz'
         minSdk 26
         targetSdk 34
-        versionCode 5
-        versionName '0.5'
+        versionCode 6
+        versionName '0.6'
     }
 
     signingConfigs {
@@ -36,7 +36,7 @@ android {
     }
 
     androidResources {
-        noCompress 'mjs', 'js', 'sf3', 'woff2', 'woff', 'otf'
+        noCompress 'mjs', 'js', 'sf3', 'woff2', 'woff', 'otf', 'ogg', 'json'
     }
 
     lint {

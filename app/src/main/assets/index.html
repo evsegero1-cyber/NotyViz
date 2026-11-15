@@ -116,9 +116,23 @@
   </div>
 </section>
 
+<section id="diag" class="screen">
+  <header class="pbar">
+    <button id="diagBack" class="icon" aria-label="Назад">‹</button>
+    <div class="ptitle"><div>Диагностика звука и синхронизации</div><div class="muted small" id="diagSub"></div></div>
+  </header>
+  <div class="diag-body">
+    <div class="row btns"><button id="diagPlay" class="chip">▶ / ❚❚</button><button id="diagRun" class="chip on">Запустить автотесты</button></div>
+    <pre id="diagLive" class="diag-pre"></pre>
+    <div id="diagTests"></div>
+  </div>
+</section>
+
 <div id="sheet" class="sheet">
   <div class="sheet-body">
     <div class="sheet-head"><b>Настройки</b><button class="icon" data-close>✕</button></div>
+
+    <div class="row btns"><button id="soundBtn" class="chip on">🎚 Звуки и инструменты</button><button id="diagBtn" class="chip">Диагностика и тесты</button></div>
 
     <label class="lbl">Скорость</label>
     <div class="seg" id="speedSeg"></div>
@@ -161,6 +175,19 @@
     <p class="muted small">«Показ» — какие дорожки видны на клавишах (на грифе — одна). «Звук» — отключить или включить инструмент.</p>
     <div id="tList"></div>
     <button id="toEditor" class="wide" style="margin-top:14px">Редактор композиции: громкость, темп, сдвиг, удаление, экспорт</button>
+  </div>
+</div>
+
+<div id="soundSheet" class="sheet">
+  <div class="sheet-body tall">
+    <div class="sheet-head"><b>Звуки и инструменты</b><button class="icon" data-close>✕</button></div>
+    <p class="muted small">Настоящие записи инструментов. Настройки сохраняются для этой композиции.</p>
+    <label class="lbl">Качество воспроизведения</label>
+    <div class="seg" id="qualSeg"><button data-q="high">Высокое</button><button data-q="eco">Экономное</button></div>
+    <p class="muted small" id="qualInfo"></p>
+    <label class="row check"><input type="checkbox" id="revOn" checked> Реверберация (эхо зала)</label>
+    <div id="sndList"></div>
+    <p class="muted small" id="sndCredits"></p>
   </div>
 </div>
 
