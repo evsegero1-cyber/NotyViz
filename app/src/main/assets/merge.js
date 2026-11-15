@@ -126,6 +126,8 @@ export function mergeSongs(files, refIdx, title, pianoName) {
       tracks.push({
         name: sel.name || tr.name, instrument: tr.instrument, kind: tr.kind, program: sel.program != null ? sel.program : tr.program,
         tuning: oct ? null : tr.tuning || null, tuningNames: oct ? null : tr.tuningNames || null, hand, volume: 1, from: f.name, notes,
+        ...(tr.bends ? { bends: tr.bends.map(([t, v]) => [Math.round(map(t)), v]) } : {}),
+        ...(tr.pedal ? { pedal: tr.pedal.map(([a, b]) => [Math.round(map(a)), Math.round(map(b))]) } : {}),
         joinKey: sel.join ? 'piano' : null
       });
     });
@@ -137,7 +139,9 @@ export function mergeSongs(files, refIdx, title, pianoName) {
     const R = joined.find(t => t.hand === 'R') || joined[0];
     const pianoTrack = {
       name: pianoName || 'Фортепиано', instrument: R.instrument, kind: 'piano', program: R.program, tuning: null, tuningNames: null, volume: 1,
-      from: [...new Set(joined.map(t => t.from))].join(' + '), notes: joined.flatMap(t => t.notes.map(n => { const q = { ...n }; delete q.s; delete q.f; if (!q.h && t.hand) q.h = t.hand; return q; }))
+      from: [...new Set(joined.map(t => t.from))].join(' + '),
+      ...(joined.some(t => t.pedal) ? { pedal: joined.flatMap(t => t.pedal || []).sort((a, b) => a[0] - b[0]) } : {}),
+      notes: joined.flatMap(t => t.notes.map(n => { const q = { ...n }; delete q.s; delete q.f; if (!q.h && t.hand) q.h = t.hand; return q; }))
     };
     const at = tracks.indexOf(joined[0]);
     for (const t of joined) tracks.splice(tracks.indexOf(t), 1);
@@ -149,7 +153,7 @@ export function mergeSongs(files, refIdx, title, pianoName) {
   const measures = ref.measures.map(m => ({ ...m, sig: [...m.sig] }));
   const tempos = ref.tempos.map(t => ({ ...t }));
   if (shift) {
-    for (const tr of tracks) for (const n of tr.notes) n.t += shift;
+    for (const tr of tracks) { for (const n of tr.notes) n.t += shift; if (tr.bends) for (const b of tr.bends) b[0] += shift; if (tr.pedal) for (const q of tr.pedal) { q[0] += shift; q[1] += shift; } }
     for (const m of measures) m.tick += shift;
     for (const t of tempos) t.tick += shift;
     tempos.unshift({ tick: 0, bpm: tempos[0].bpm });

@@ -149,6 +149,7 @@
 
     <label class="row check"><input type="checkbox" id="names" checked> Названия нот на клавишах</label>
     <label class="row check"><input type="checkbox" id="fullKb"> Вся клавиатура (88 клавиш)</label>
+    <label class="row check"><input type="checkbox" id="hints" checked> Подсказки по техникам (нажмите на обозначение)</label>
 
     <div id="info" class="muted small info"></div>
   </div>
@@ -189,6 +190,13 @@
       <button id="edListen">Послушать</button>
       <button id="edDel" class="danger">Удалить ноту</button>
     </div>
+  </div>
+</div>
+
+<div id="techSheet" class="sheet">
+  <div class="sheet-body">
+    <div class="sheet-head"><b>Техника исполнения</b><button class="icon" data-close>✕</button></div>
+    <div id="techBody"></div>
   </div>
 </div>
 

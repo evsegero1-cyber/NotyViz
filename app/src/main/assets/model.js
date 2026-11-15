@@ -1,3 +1,4 @@
+import { perform } from './techniques.js';
 // Единая модель композиции (версия 2) и всё, что с ней связано:
 // время (тики ↔ секунды), определение инструментов, раскладка по струнам, сборка MIDI для синтезатора.
 export const PPQ = 960;
@@ -114,15 +115,41 @@ export function buildMidiFile(alphaTab, song, opts = {}) {
   for (const m of song.measures) { const k = m.sig.join('/'); if (k !== lastSig) { h.addTimeSignature(m.tick, m.sig[0], m.sig[1]); lastSig = k; } }
   const end = song.totalTicks;
   const prog = opts.prog || {};
+  // свободные каналы для тембров техник (глушение ладонью, флажолеты) у гитар и басов
+  const used = new Set(song.tracks.map(t => t.channel)); used.add(9);
+  const free = []; for (let c = 0; c < 16; c++) if (!used.has(c)) free.push(c);
+  const BR = 16; // диапазон подтяжки ±16 полутонов, как у alphaTab
+  const setRange = (ti, ch) => { h.addControlChange(ti, 0, ch, 101, 0); h.addControlChange(ti, 0, ch, 100, 0); h.addControlChange(ti, 0, ch, 6, BR); h.addControlChange(ti, 0, ch, 38, 0); };
   song.tracks.forEach((tr, ti) => {
     const ch = tr.channel;
     const p = prog[ti] != null ? prog[ti] : tr.program || 0;
-    h.addProgramChange(ti, 0, ch, tr.kind === 'drums' ? 0 : p);
+    const drums = tr.kind === 'drums';
+    h.addProgramChange(ti, 0, ch, drums ? 0 : p);
     h.addControlChange(ti, 0, ch, 7, 110);
-    for (const n of tr.notes) {
-      if (n.tie || n.deleted) continue;
-      h.addNote(ti, n.t, Math.max(1, n.d), n.m, n.v || 96, ch);
+    if (!drums) setRange(ti, ch);
+    const perf = perform(tr, PPQ);
+    // тембры: P.M. и глухие ноты — «приглушённая гитара», флажолеты — «гитарные флажолеты»
+    const fx = {};
+    if (isStringKind(tr.kind) && prog[ti] == null) {
+      const need = new Set(perf.events.map(e => e.ch).filter(Boolean));
+      if ((need.has('pm') || need.has('dead')) && free.length) { fx.pm = fx.dead = free.shift(); h.addProgramChange(ti, 0, fx.pm, 28); h.addControlChange(ti, 0, fx.pm, 7, 110); setRange(ti, fx.pm); }
+      if (need.has('harm') && free.length) { fx.harm = free.shift(); h.addProgramChange(ti, 0, fx.harm, 31); h.addControlChange(ti, 0, fx.harm, 7, 110); setRange(ti, fx.harm); }
     }
+    if (opts.fxOut) opts.fxOut[ti] = [...new Set(Object.values(fx))];
+    for (const e of perf.events) {
+      const c = e.ch && fx[e.ch] != null ? fx[e.ch] : ch;
+      h.addNote(ti, Math.max(0, Math.round(e.t)), Math.max(1, Math.round(e.d)), Math.max(0, Math.min(127, e.m)), Math.max(1, Math.min(127, Math.round(e.v || 96))), c);
+    }
+    // подтяжки струн и рычаг
+    if (!drums && perf.bends.length) {
+      const chans = [ch, ...new Set(Object.values(fx))];
+      for (const [t, semi] of perf.bends) {
+        const val = Math.max(0, Math.min(16383, Math.round(8192 + semi / BR * 8192)));
+        for (const c of chans) h.addBend(ti, Math.max(0, Math.round(t)), c, val);
+      }
+    }
+    // педаль сустейна
+    if (tr.pedal) for (const [a, b] of tr.pedal) { h.addControlChange(ti, Math.round(a), ch, 64, 127); h.addControlChange(ti, Math.round(b), ch, 64, 0); }
     h.finishTrack(ti, end);
   });
   // Метроном: по событию на каждую долю
@@ -165,7 +192,8 @@ export function fromBeatSong(old) {
   for (const m of old.measures) { const bpm = m.tempo || 120; if (bpm !== last) { tempos.push({ tick: B(m.start), bpm }); last = bpm; } }
   const inst = kindFromInstrumentText(old.instrument || old.track);
   const drum = old.isDrum || inst.kind === 'drums';
-  const notes = old.notes.map(n => ({ t: B(n.start), d: Math.max(1, B(n.dur)), m: n.midi, v: 96, s: drum ? undefined : n.string, f: drum ? undefined : n.fret, bar: n.measure, page: n.page, box: n.box, voice: n.voice }));
+  const notes = old.notes.map(n => ({ t: B(n.start), d: Math.max(1, B(n.dur)), m: n.midi, v: 96, s: drum ? undefined : n.string, f: drum ? undefined : n.fret, bar: n.measure, page: n.page, box: n.box, voice: n.voice,
+    ...(n.x ? { x: n.x } : {}), ...(n.hand ? { h: n.hand } : {}) }));
   const track = {
     name: old.track || old.instrument || 'Дорожка', instrument: old.instrument || '', kind: drum ? 'drums' : old.isBass && inst.kind !== 'piano' ? 'bass' : inst.kind, program: drum ? 0 : inst.program,
     tuning: drum ? null : old.tuning, tuningNames: drum ? null : old.tuningNames, notes

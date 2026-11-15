@@ -1,4 +1,5 @@
 // Отрисовка: клавиатура с падающими нотами и гриф с табулатурой
+import { techIds, techLabel, bendText, curveAt, TECH } from './techniques.js';
 export const SHORT = ['до', 'до♯', 'ре', 'ми♭', 'ми', 'фа', 'фа♯', 'сол', 'ля♭', 'ля', 'си♭', 'си'];
 export const isBlack = m => [1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12);
 export const HAND = { R: ['#4c9aff', '#2f6fcc', '#a9cdff'], L: ['#ff8a3d', '#c85e1c', '#ffc59c'] };
@@ -81,7 +82,22 @@ export class PianoView {
     measureLines(g, ctx, 0, W, yOf, 0, fallH);
     const active = new Map();
     const t1 = t + win;
+    const hot = ctx.hot;
+    const addHot = (x, y, w, h, x2) => { if (!hot || !x2 || hot.length > 300) return; const ids = techIds(x2, 'piano'); if (ids.length) hot.push({ x, y, w, h, ids }); };
+    // педаль сустейна: полоса слева, падает вместе с нотами
+    let pedalDown = false;
+    if (ctx.pedal && ctx.pedal.length) {
+      for (const [a, b] of ctx.pedal) {
+        if (a <= t && b > t) pedalDown = true;
+        if (a > t1 || b < t) continue;
+        const y0 = Math.max(0, yOf(b)), y1 = Math.min(fallH, yOf(a));
+        g.fillStyle = 'rgba(60,207,142,.28)'; g.fillRect(0, y0, 7, y1 - y0);
+        g.fillStyle = '#3ccf8e'; g.fillRect(0, y1 - 2, 12, 2); g.fillRect(0, y0, 12, 1.5);
+        if (y1 - y0 > 30) addHot(0, y0, 14, y1 - y0, { pedal: true });
+      }
+    }
     let i = ctx.firstIdx(notes, t - 30);
+    const drawn = new Map();
     for (; i < notes.length; i++) {
       const n = notes[i];
       if (n.s > t1) break; if (n.e < t - 0.02) continue;
@@ -92,17 +108,49 @@ export class PianoView {
       const y1 = yOf(n.s), y0 = yOf(n.e);
       const top = Math.max(-4, y0), bot = Math.min(fallH, y1);
       if (bot <= top) continue;
-      const pad = k.black ? 1 : 2;
+      const x = n.x || {};
+      // форшлаг — узкая нота; динамика — яркость
+      const pad = x.grace ? k.w * 0.28 : (k.black ? 1 : 2);
+      g.globalAlpha = 0.5 + 0.5 * Math.min(1, (n.v || 96) / 112);
       rr(g, k.x + pad, top, k.w - pad * 2, Math.max(4, bot - top), 5);
       g.fillStyle = on ? c[2] : (k.black ? c[1] : c[0]); g.fill();
+      g.globalAlpha = 1;
+      drawn.set(i, { x: k.x + k.w / 2, top, bot });
       if (names && k.w > 15 && bot - top > 16 && y1 < fallH + 1) {
         g.fillStyle = 'rgba(0,0,0,.65)'; g.font = `600 ${Math.min(12, k.w * 0.45)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'bottom';
         g.fillText(SHORT[n.m % 12], k.x + k.w / 2, bot - 3); g.textAlign = 'left';
       }
+      if (!n.first || !n.x) continue;
+      // обозначения у начала ноты (нижний край)
+      const cx = k.x + k.w / 2, fs = Math.max(10, Math.min(14, k.w * 0.6));
+      g.font = `700 ${fs}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'bottom';
+      const marks = [];
+      if (x.stacc) marks.push('•'); if (x.acc === 1) marks.push('>'); if (x.acc === 2) marks.push('^'); if (x.acc === 3) marks.push('–');
+      if (marks.length && y1 < fallH + 2) { g.fillStyle = '#fff'; g.fillText(marks.join(''), cx, Math.min(fallH, y1) + 1 - (bot - top > 30 && names && k.w > 15 ? 16 : 0)); addHot(cx - 10, bot - 18, 20, 18, x); }
+      const side = [];
+      if (x.tr != null && !x.trillAux) side.push('tr'); if (x.orn) side.push(x.orn.includes('turn') ? '∾' : 'mord.');
+      if (x.gliss) side.push('gliss.'); if (x.trem) side.push('≡'); if (x.tup && n.tupStart) side.push(x.tup.split(':')[0]); if (x.ott && n.ottStart) side.push(x.ott);
+      if (x.cresc && n.crescStart) side.push(x.cresc === 'dim' ? 'dim.' : 'cresc.');
+      if (x.dynMark && x.dyn) side.push(x.dyn);
+      if (side.length) {
+        g.font = 'italic 700 11px system-ui'; g.textAlign = 'left'; g.fillStyle = '#ffd9bd';
+        const tx = k.x + k.w + 2, ty = Math.min(fallH - 2, bot);
+        g.fillText(side.join(' '), tx, ty); addHot(tx - 2, ty - 14, side.join(' ').length * 7 + 4, 16, x);
+      }
+      if (x.ferm && top > 0) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(cx, top - 3, 6, Math.PI, 0); g.stroke(); g.fillStyle = '#fff'; g.beginPath(); g.arc(cx, top - 4, 1.5, 0, 7); g.fill(); addHot(cx - 8, top - 12, 16, 12, { ferm: x.ferm }); }
+      if (x.arp) { g.strokeStyle = '#ffd23f'; g.lineWidth = 1.5; g.beginPath(); for (let yy = 0; yy < 24; yy += 2) g.lineTo(k.x - 4 + Math.sin(yy / 2) * 2.5, bot - yy); g.stroke(); addHot(k.x - 9, bot - 26, 10, 26, { arp: x.arp }); }
     }
+    // легато: дуга от конца ноты к началу следующей
+    g.strokeStyle = 'rgba(255,217,189,.75)'; g.lineWidth = 1.5;
+    for (const [idx, d] of drawn) {
+      const n = notes[idx]; if (!n.x || !n.x.leg || n.nextIdx == null) continue;
+      const d2 = drawn.get(n.nextIdx); if (!d2) continue;
+      g.beginPath(); g.moveTo(d.x, d.top); g.quadraticCurveTo((d.x + d2.x) / 2 + 8, (d.top + d2.bot) / 2, d2.x, d2.bot); g.stroke();
+    }
+    this.pedalDown = pedalDown;
     const ky = fallH, KB = this.KB;
     g.fillStyle = '#000'; g.fillRect(0, ky, W, KB);
-    g.fillStyle = '#3a3f4a'; g.fillRect(0, ky, W, 3);
+    g.fillStyle = this.pedalDown ? '#3ccf8e' : '#3a3f4a'; g.fillRect(0, ky, W, 3);
     for (const m of pressed) if (!active.has(m)) active.set(m, ['#9cc5ff', '#6fa6e8', '#cfe3ff']);
     for (const [m, k] of this.keys) if (!k.black) {
       const c = active.get(m);
@@ -121,30 +169,52 @@ export class PianoView {
       rr(g, k.x, ky + 3, k.w, this.blackH, 3);
       g.fillStyle = c ? c[1] : '#1c1d21'; g.fill();
     }
+    if (ctx.pedal && ctx.pedal.length) {
+      const lbl = this.pedalDown ? 'Педаль ▼' : 'Педаль';
+      g.font = '600 11px system-ui'; const tw = g.measureText(lbl).width + 12;
+      rr(g, 4, ky - 20, tw, 17, 8); g.fillStyle = this.pedalDown ? '#3ccf8e' : 'rgba(23,26,33,.85)'; g.fill();
+      g.fillStyle = this.pedalDown ? '#000' : '#8b93a3'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(lbl, 10, ky - 11.5);
+      if (ctx.hot) ctx.hot.push({ x: 4, y: ky - 20, w: tw, h: 17, ids: ['pedal'] });
+    }
   }
 }
 
 // ---------- Гриф + табулатура ----------
+// Техники: слайд (движение по грифу), бенд и вибрато (смещение и колебание точки), h/p, P.M., флажолеты, тэппинг…
+const clamp01 = v => Math.max(0, Math.min(1, v));
+function techText(x, f) {
+  if (!x) return String(f);
+  if (x.dead) return 'x';
+  if (x.harm) return '<' + f + '>';
+  if (x.ghost) return '(' + f + ')';
+  return String(f);
+}
 export class GuitarView {
   setTrack(track, notes) {
     this.track = track; this.nStr = track.tuning.length;
     let lo = 99, hi = 0;
-    for (const n of notes) if (n.f != null) { if (n.f > 0) lo = Math.min(lo, n.f); hi = Math.max(hi, n.f); }
+    for (const n of notes) if (n.f != null) { if (n.f > 0) lo = Math.min(lo, n.f); hi = Math.max(hi, n.f); if (n.x && n.x.slTo != null) hi = Math.max(hi, n.x.slTo); }
     if (lo === 99) lo = 1;
     lo = Math.max(1, lo - 1); hi = Math.max(hi + 1, lo + 6);
     this.f0 = lo; this.f1 = Math.min(36, hi);
   }
   draw(g, W, H, ctx) {
-    const { t, notes, speed, tuningNames } = ctx;
+    const { t, notes, speed, tuningNames, hot } = ctx;
     const n = this.nStr;
+    const bendNow = q => (q.x && (q.x.bend || q.x.vib || q.x.whammy || (q.x.sl && q.x.sl !== 'shift'))) ? curveAt(ctx.bends, ctx.tick) : 0;
+    const slideFret = q => {
+      if (!q.x || !q.x.sl || q.x.slTo == null || q.f == null) return q.f;
+      const k = clamp01((t - (q.s + (q.e - q.s) * 0.5)) / Math.max(0.01, (q.e - q.s) * 0.5));
+      return q.f + (q.x.slTo - q.f) * k;
+    };
+    const addHot = (x, y, w, h, x2, kind) => { if (!hot || !x2 || hot.length > 300) return; const ids = techIds(x2, kind); if (ids.length) hot.push({ x, y, w, h, ids }); };
     g.fillStyle = '#0f1115'; g.fillRect(0, 0, W, H);
-    // Зоны: табулатура сверху, «дорога», гриф снизу
     const strGap = Math.max(11, Math.min(18, H * 0.028));
-    const tabH = strGap * (n - 1) + 34;
+    const tabTop = 22, tabH = strGap * (n - 1) + tabTop + 16;
     const fbH = strGap * 1.25 * (n - 1) + 36;
     const roadTop = tabH + 6, roadBot = H - fbH;
     // --- лента табулатуры ---
-    const tabTop = 18, playX = Math.round(W * 0.22);
+    const playX = Math.round(W * 0.22);
     const pxs = Math.max(90, Math.min(220, W / 3.2)) / Math.max(0.4, speed);
     g.fillStyle = '#141820'; g.fillRect(0, 0, W, tabH);
     g.strokeStyle = '#3a404c'; g.lineWidth = 1;
@@ -152,32 +222,62 @@ export class GuitarView {
     g.fillStyle = '#8b93a3'; g.font = '11px system-ui'; g.textBaseline = 'middle'; g.textAlign = 'left';
     if (tuningNames) for (let s = 0; s < n; s++) g.fillText(tuningNames[s] || '', 3, tabTop + s * strGap);
     const xOfT = s => playX + (s - t) * pxs;
-    // такты
     for (let i = Math.max(0, ctx.measureIdx - 2); i < ctx.mStarts.length; i++) {
       const x = xOfT(ctx.mStarts[i]); if (x > W) break; if (x < 0) continue;
       g.fillStyle = '#4a5160'; g.fillRect(x, tabTop, 1, strGap * (n - 1));
-      g.fillStyle = '#5b6372'; g.textBaseline = 'bottom'; g.fillText(ctx.measures[i].n, x + 2, tabTop - 3);
+      g.fillStyle = '#5b6372'; g.textBaseline = 'bottom'; g.fillText(ctx.measures[i].n, x + 2, tabTop - 9);
     }
     const tA = t - playX / pxs, tB = t + (W - playX) / pxs;
-    g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = `600 ${Math.round(strGap * 0.82)}px system-ui`;
-    let i = ctx.firstIdx(notes, tA - 10);
-    for (let j = i; j < notes.length; j++) {
+    const i0 = ctx.firstIdx(notes, tA - 10);
+    // соединения: h/p и слайды — от ноты к следующей на той же струне
+    g.lineWidth = 1.3;
+    for (let j = i0; j < notes.length; j++) {
+      const q = notes[j]; if (q.s > tB) break; if (!q.x || q.next == null) continue;
+      const nx = notes[q.next]; const x1 = xOfT(q.s), x2 = xOfT(nx.s), y = tabTop + q.st * strGap;
+      if (x2 < 0) continue;
+      if (q.x.hp) {
+        g.strokeStyle = '#c77dff'; g.beginPath(); g.moveTo(x1 + 4, y - 6); g.quadraticCurveTo((x1 + x2) / 2, y - 14, x2 - 4, y - 6); g.stroke();
+        g.fillStyle = '#d9b3ff'; g.font = '600 10px system-ui'; g.textAlign = 'center'; g.textBaseline = 'bottom'; g.fillText(q.x.hp, (x1 + x2) / 2, y - 11);
+        addHot((x1 + x2) / 2 - 8, y - 22, 16, 14, { hp: q.x.hp }, 'g');
+      }
+      if (q.x.sl && q.x.slTo != null) {
+        g.strokeStyle = '#4dd0e1'; g.beginPath(); const up = q.x.slTo > q.f;
+        g.moveTo(x1 + 7, y + (up ? 4 : -4)); g.lineTo(x2 - 7, y + (up ? -4 : 4)); g.stroke();
+        addHot((x1 + x2) / 2 - 8, y - 8, 16, 16, { sl: q.x.sl }, 'g');
+      }
+    }
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (let j = i0; j < notes.length; j++) {
       const q = notes[j]; if (q.s > tB) break; if (q.e < tA || q.f == null) continue;
       const x = xOfT(q.s), y = tabTop + q.st * strGap;
       const on = q.s <= t && q.e > t;
       const len = Math.max(0, (Math.min(q.e, tB) - q.s) * pxs);
       g.fillStyle = on ? 'rgba(76,154,255,.35)' : 'rgba(255,255,255,.07)';
       g.fillRect(x, y - 2, len, 4);
-      const txt = String(q.f); const tw = g.measureText(txt).width + 6;
+      if (q.x && q.x.vib && len > 10) { g.strokeStyle = '#ffd23f'; g.lineWidth = 1; g.beginPath(); for (let k = 0; k <= len; k += 2) g.lineTo(x + k, y - strGap * 0.45 + Math.sin(k / 2.2) * 1.6); g.stroke(); }
+      if (q.x && q.x.pm) { g.fillStyle = 'rgba(255,138,61,.18)'; g.fillRect(x - 6, y - strGap / 2, Math.max(12, len), strGap); }
+      g.font = `600 ${Math.round(strGap * 0.82)}px system-ui`;
+      const txt = techText(q.x, q.f); const tw = g.measureText(txt).width + 6;
       g.fillStyle = '#141820'; g.fillRect(x - tw / 2, y - strGap / 2 + 1, tw, strGap - 2);
-      g.fillStyle = on ? '#9cc5ff' : '#e9ecf2'; g.fillText(txt, x, y + 1);
+      g.fillStyle = q.x && q.x.harm ? '#4dd0e1' : q.x && q.x.ghost ? '#8b93a3' : on ? '#9cc5ff' : '#e9ecf2'; g.fillText(txt, x, y + 1);
+      if (q.x) {
+        const lab = techLabel(q.x);
+        if (q.x.bend) { g.strokeStyle = '#ff8a3d'; g.lineWidth = 1.3; g.beginPath(); g.moveTo(x + tw / 2, y); g.quadraticCurveTo(x + tw / 2 + 8, y, x + tw / 2 + 9, y - 8); g.stroke(); }
+        if (lab || q.x.stroke) {
+          g.font = '600 9px system-ui'; g.fillStyle = '#ffb27a'; g.textBaseline = 'bottom';
+          const s2 = (q.x.stroke ? (q.x.stroke === 'up' ? '↑ ' : '↓ ') : '') + lab;
+          g.fillText(s2, x + (q.x.bend ? 12 : 0), y - strGap * 0.45);
+          addHot(x - 14, y - strGap - 6, 28, strGap + 6, q.x, 'g');
+          g.textBaseline = 'middle';
+        }
+      }
     }
     g.fillStyle = 'rgba(76,154,255,.8)'; g.fillRect(playX, 4, 2, tabH - 8);
     // --- гриф: геометрия ---
     const nutX = 46, fbX1 = W - 6;
     const nf = this.f1 - this.f0 + 1;
     const fw = (fbX1 - nutX) / nf;
-    const fretX = f => f === 0 ? 31 : nutX + (f - this.f0 + 0.5) * fw;
+    const fretXf = f => f <= 0 ? 31 : nutX + (f - this.f0 + 0.5) * fw;
     const fbTop = roadBot + 14, sg = strGap * 1.25;
     const laneW = fw / Math.max(1, n);
     // --- падающие ноты ---
@@ -190,20 +290,42 @@ export class GuitarView {
     g.fillStyle = '#1d222b'; g.fillRect(nutX - 1, roadTop, 2, roadH);
     measureLines(g, ctx, 0, W, yOf, roadTop, roadBot);
     const active = [];
-    const t1 = t + win;
-    for (let j = i; j < notes.length; j++) {
-      const q = notes[j]; if (q.s > t1) break; if (q.e < t - 0.02 || q.f == null) continue;
+    const laneX = (f, st) => f <= 0 ? 31 : nutX + (f - this.f0) * fw + (st + 0.5) * laneW;
+    for (let j = i0; j < notes.length; j++) {
+      const q = notes[j]; if (q.s > t + win) break; if (q.e < t - 0.02 || q.f == null) continue;
       if (q.f > 0 && (q.f < this.f0 || q.f > this.f1)) continue;
       const on = q.s <= t && q.e > t; if (on) active.push(q);
       const col = STRING_COLORS[q.st % STRING_COLORS.length];
-      const cx = q.f === 0 ? 31 : nutX + (q.f - this.f0) * fw + (q.st + 0.5) * laneW;
+      const x = q.x || {};
+      const cx = laneX(q.f, q.st);
       const w = q.f === 0 ? 22 : Math.max(8, laneW - 2);
       const y1 = Math.min(roadBot, yOf(q.s)), y0 = Math.max(roadTop, yOf(q.e));
       if (y1 <= y0) continue;
-      g.globalAlpha = on ? 1 : 0.85;
-      rr(g, cx - w / 2, y0, w, Math.max(6, y1 - y0), 4); g.fillStyle = on ? shade(col, 0.45) : col; g.fill();
+      g.globalAlpha = x.ghost ? 0.45 : on ? 1 : 0.85;
+      if (x.sl && x.slTo != null) {
+        // слайд: верх ноты смещается к целевому ладу
+        const yMid = yOf(q.s + (q.e - q.s) * 0.5), cx2 = laneX(x.slTo, q.st);
+        g.beginPath(); g.moveTo(cx - w / 2, y1); g.lineTo(cx + w / 2, y1); g.lineTo(cx + w / 2, Math.max(y0, yMid)); g.lineTo(cx2 + w / 2, y0); g.lineTo(cx2 - w / 2, y0); g.lineTo(cx - w / 2, Math.max(y0, yMid)); g.closePath();
+        g.fillStyle = on ? shade(col, 0.45) : col; g.fill();
+      } else if (x.harm) {
+        rr(g, cx - w / 2, y0, w, Math.max(6, y1 - y0), 4); g.fillStyle = 'rgba(77,208,225,.25)'; g.fill(); g.strokeStyle = '#4dd0e1'; g.lineWidth = 1.5; g.stroke();
+        g.beginPath(); const dy = Math.min(9, w * 0.6); g.moveTo(cx, y1 - dy * 2); g.lineTo(cx + dy, y1 - dy); g.lineTo(cx, y1); g.lineTo(cx - dy, y1 - dy); g.closePath(); g.fillStyle = '#4dd0e1'; g.fill();
+      } else {
+        rr(g, cx - w / 2, y0, w, Math.max(6, y1 - y0), 4); g.fillStyle = on ? shade(col, 0.45) : col; g.fill();
+        if (x.pm) { g.save(); g.clip(); g.strokeStyle = 'rgba(0,0,0,.45)'; g.lineWidth = 2; for (let yy = y0 - w; yy < y1 + w; yy += 6) { g.beginPath(); g.moveTo(cx - w / 2, yy + w); g.lineTo(cx + w / 2, yy); g.stroke(); } g.restore(); }
+        if (x.vib) { g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 1.5; g.beginPath(); for (let yy = y0; yy < y1; yy += 2) g.lineTo(cx + Math.sin(yy / 3) * w * 0.25, yy); g.stroke(); }
+        if (x.tap) { g.strokeStyle = '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(cx, y1 - 4, Math.min(8, w * 0.6), 0, 7); g.stroke(); }
+      }
       g.globalAlpha = 1;
-      if (y1 - y0 > 14 && w >= 12) { g.fillStyle = 'rgba(0,0,0,.7)'; g.font = `700 ${Math.min(12, w * 0.8)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'bottom'; g.fillText(q.f, cx, y1 - 2); }
+      if (x.bend) { g.strokeStyle = '#ff8a3d'; g.lineWidth = 2; g.beginPath(); g.moveTo(cx, y1 - 2); g.quadraticCurveTo(cx + w, y1 - 6, cx + w * 0.9, Math.max(y0, y1 - 26)); g.stroke(); }
+      if (y1 - y0 > 14 && w >= 12) {
+        g.fillStyle = 'rgba(0,0,0,.75)'; g.font = `700 ${Math.min(12, w * 0.8)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'bottom';
+        g.fillText(x.dead ? 'x' : q.f, cx, y1 - 2);
+      }
+      if (q.x) {
+        const lab = techLabel(q.x) || (x.hp ? x.hp : '');
+        if (lab && y1 - y0 > 6) { g.font = '600 10px system-ui'; g.fillStyle = '#ffd9bd'; g.textAlign = 'left'; g.textBaseline = 'bottom'; g.fillText(lab, cx + w / 2 + 2, y1 - 1); addHot(cx - w / 2, y1 - 16, w + 4 + lab.length * 6, 18, q.x, 'g'); }
+      }
     }
     // --- гриф ---
     g.fillStyle = '#2a1f17'; g.fillRect(nutX, fbTop - 8, fbX1 - nutX, sg * (n - 1) + 16);
@@ -223,11 +345,27 @@ export class GuitarView {
       g.fillStyle = '#8b93a3'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '11px system-ui';
       g.fillText(tuningNames && tuningNames[s] ? tuningNames[s] : (s + 1), 10, y);
     }
+    // активные позиции: бенд и вибрато сдвигают точку поперёк струны, слайд — вдоль
+    let caption = '';
     for (const q of active) {
-      const x = fretX(q.f), y = fbTop + q.st * sg;
+      const x = q.x || {};
+      const ff = slideFret(q);
+      const bx = fretXf(ff), semi = bendNow(q);
+      const y = fbTop + q.st * sg - Math.max(-1.5, Math.min(3, semi)) * sg * 0.35;
       const col = STRING_COLORS[q.st % STRING_COLORS.length];
-      g.fillStyle = col; g.beginPath(); g.arc(x, y, Math.min(11, sg * 0.55 + 2), 0, 7); g.fill();
-      g.fillStyle = '#000'; g.font = '700 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(q.f, x, y + 0.5);
+      const r = Math.min(11, sg * 0.55 + 2);
+      if (semi && Math.abs(semi) > 0.05) { g.strokeStyle = col; g.lineWidth = 2; g.beginPath(); g.moveTo(bx, fbTop + q.st * sg); g.lineTo(bx, y); g.stroke(); }
+      if (x.harm) { g.strokeStyle = '#4dd0e1'; g.lineWidth = 3; g.beginPath(); g.moveTo(bx, y - r - 2); g.lineTo(bx + r + 2, y); g.lineTo(bx, y + r + 2); g.lineTo(bx - r - 2, y); g.closePath(); g.stroke(); }
+      g.fillStyle = x.pm ? shade(col, -0.45) : col; g.beginPath(); g.arc(bx, y, r, 0, 7); g.fill();
+      if (x.tap) { g.strokeStyle = '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(bx, y, r + 4, 0, 7); g.stroke(); }
+      g.fillStyle = x.pm ? '#fff' : '#000'; g.font = '700 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(x.dead ? 'x' : Math.round(ff), bx, y + 0.5);
+      const ids = techIds(q.x, 'g'); if (ids.length && !caption) caption = ids.map(id => TECH[id] ? TECH[id].name.split(' (')[0] : '').filter(Boolean).slice(0, 2).join(' · ') + (x.bend ? ' ' + bendText(x.bend.max).trim() : '');
+    }
+    if (caption) {
+      g.font = '600 12px system-ui'; const tw = g.measureText(caption).width + 16;
+      rr(g, W - tw - 8, roadBot - 26, tw, 20, 10); g.fillStyle = 'rgba(23,26,33,.9)'; g.fill();
+      g.fillStyle = '#ffd9bd'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(caption, W - tw, roadBot - 16);
     }
     g.textAlign = 'left';
   }

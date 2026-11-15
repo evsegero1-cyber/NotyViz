@@ -136,3 +136,52 @@ input[type=text]{background:var(--bg3);border:1px solid var(--line);border-radiu
 .etr input[type=range]{flex:1}
 .etr .vol{min-width:44px;text-align:right;font-size:13px;color:var(--mut)}
 input[type=number].sm{width:70px}
+
+/* Карточки техник */
+.tchips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px}
+.tchips .muted{width:100%}
+.tcard{border-top:1px solid var(--line);padding:10px 0}
+.tcard:first-child{border-top:none}
+.thead{display:flex;gap:12px;align-items:center}
+.tsym{min-width:54px;height:44px;border-radius:10px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font:700 17px Georgia,serif;color:#ffd9bd;padding:0 6px}
+.tname{font-weight:600;font-size:16px}
+.ttext{margin:8px 0 4px;font-size:14px}.thow{margin:4px 0;font-size:14px;color:#cdd3de}
+.tanim{position:relative;height:56px;margin-top:8px;background:#12151b;border-radius:10px;overflow:hidden}
+.ta-str{position:absolute;left:8%;right:8%;top:28px;height:2px;background:#c9c4b8}
+.ta-dot{position:absolute;left:40%;top:20px;width:18px;height:18px;border-radius:50%;background:#4c9aff}
+.ta-dot.d2{left:56%;background:#c77dff;opacity:0}
+.ta-dia{position:absolute;left:46%;top:16px;width:20px;height:20px;transform:rotate(45deg);border:3px solid #4dd0e1}
+.ta-x{position:absolute;left:47%;top:8px;font:700 28px system-ui;color:#ff5c5c}
+.ta-palm{position:absolute;right:10%;top:10px;width:40px;height:36px;border-radius:12px 12px 4px 4px;background:rgba(255,138,61,.5)}
+.ta-key{position:absolute;top:10px;width:22px;height:36px;border-radius:4px;background:#f2f2f0;left:46%}
+.ta-key.k1{left:30%}.ta-key.k2{left:42%}.ta-key.k3{left:54%}.ta-key.k4{left:66%}
+.ta-bar{position:absolute;left:10%;top:24px;height:8px;border-radius:4px;background:#3ccf8e}
+.ta-arrow{position:absolute;left:46%;top:4px;font:700 36px system-ui;color:#ffd23f}
+.ta-pedal{position:absolute;left:40%;top:14px;width:60px;height:22px;border-radius:6px;background:#3ccf8e;transform-origin:left center}
+.ta-wedge{position:absolute;left:25%;top:18px;width:50%;height:20px;background:#ffd9bd}
+@keyframes bend{0%,20%{transform:translateY(0)}60%,80%{transform:translateY(-14px)}100%{transform:translateY(0)}}
+@keyframes release{0%,20%{transform:translateY(-14px)}70%,100%{transform:translateY(0)}}
+@keyframes vib{0%,100%{transform:translateY(0)}25%{transform:translateY(-5px)}75%{transform:translateY(5px)}}
+@keyframes slide{0%,15%{left:20%}75%,100%{left:68%}}
+@keyframes hp{0%,40%{opacity:0;transform:scale(1.6)}55%,100%{opacity:1;transform:scale(1)}}
+@keyframes pl{0%,40%{opacity:1}55%,100%{opacity:0;transform:translateY(8px)}}
+@keyframes tap{0%,50%{transform:translateY(-16px);opacity:.3}60%{transform:translateY(0);opacity:1}100%{opacity:1}}
+@keyframes mute{0%,100%{opacity:.4}50%{opacity:1}}
+@keyframes glow{0%,100%{box-shadow:0 0 0 rgba(77,208,225,0)}50%{box-shadow:0 0 16px #4dd0e1}}
+@keyframes key{0%,100%{background:#f2f2f0}10%,40%{background:#4c9aff}}
+@keyframes stacc{0%{background:#f2f2f0}5%,15%{background:#4c9aff}20%,100%{background:#f2f2f0}}
+@keyframes ring{0%{width:5%}100%{width:80%}}
+@keyframes up{0%{transform:translateY(14px);opacity:0}100%{transform:translateY(-6px);opacity:1}}
+@keyframes down{0%{transform:translateY(-14px);opacity:0}100%{transform:translateY(6px);opacity:1}}
+@keyframes ghost{0%,100%{background:#f2f2f0}30%{background:rgba(76,154,255,.35)}}
+@keyframes accent{0%,100%{background:#f2f2f0;transform:scale(1)}15%{background:#ff5c5c;transform:scale(1.15)}}
+@keyframes pedal{0%,30%{transform:rotate(0)}40%,80%{transform:rotate(12deg)}90%,100%{transform:rotate(0)}}
+@keyframes cresc{0%{clip-path:polygon(0 50%,100% 0,100% 100%)}100%{clip-path:polygon(0 50%,100% 0,100% 100%)}}
+.a-bend{animation:bend 1.6s infinite}.a-release{animation:release 1.6s infinite}.a-vib{animation:vib .35s infinite}.a-slide{animation:slide 1.6s infinite}
+.a-hammer{animation:hp 1.4s infinite}.a-pull{opacity:1!important;animation:pl 1.4s infinite}.a-tap{animation:tap 1.2s infinite}.a-mute{animation:mute 1s infinite}
+.a-glow{animation:glow 1.4s infinite}.a-ghost{animation:ghost 1.4s infinite}.a-ring{animation:ring 2s infinite}.a-up{animation:up 1s infinite}.a-down{animation:down 1s infinite}
+.a-tr1{animation:key .3s infinite}.a-tr2{animation:key .3s .15s infinite}.a-trem{animation:key .18s infinite}.a-stacc{animation:stacc 1s infinite}.a-acc{animation:accent 1.2s infinite}
+.a-leg1{animation:key 1.2s infinite}.a-leg2{animation:key 1.2s .35s infinite}
+.a-s1{animation:key 1.2s infinite}.a-s2{animation:key 1.2s .15s infinite}.a-s3{animation:key 1.2s .3s infinite}.a-s4{animation:key 1.2s .45s infinite}
+.a-grace{animation:stacc 1.2s infinite;width:12px!important}.a-pedal{animation:pedal 2s infinite}
+.a-cresc{clip-path:polygon(0 50%,100% 0,100% 100%);animation:mute 2s infinite}.a-dim{clip-path:polygon(0 0,100% 50%,0 100%);animation:mute 2s infinite}

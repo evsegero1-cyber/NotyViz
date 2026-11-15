@@ -1,4 +1,5 @@
 // Импорт MIDI (.mid/.midi) через @tonejs/midi → модель v2
+import { velToDyn } from './techniques.js';
 import { PPQ, handFromName, kindFromProgram, programName, buildMeasures, assignChannels, assignFrets, STD_TUNING, isStringKind } from './model.js';
 
 // Названия в MIDI часто в UTF-8 или Windows-1251, а парсер отдаёт их побайтно
@@ -29,6 +30,32 @@ export function importMidi(MidiClass, bytes, fileName) {
     for (const n of notes) total = Math.max(total, n.t + n.d);
     const name = fixText(tr.name).trim() || programName(program, kind);
     const t = { name, instrument: programName(program, kind), kind, program, notes };
+    for (const n of notes) n.real = true;
+    // Подтяжки (pitch bend): диапазон берём из RPN 0, иначе стандартные ±2 полутона
+    const cc = tr.controlChanges || {};
+    let range = 2;
+    if (cc[6] && cc[6].length && cc[101] && cc[100]) range = Math.max(1, Math.round(cc[6][0].value * 127));
+    const pb = (tr.pitchBends || []).map(b => [T(b.ticks), +(b.value * range).toFixed(3)]);
+    if (pb.some(b => Math.abs(b[1]) > 0.05)) {
+      t.bends = pb;
+      for (const n of notes) {
+        const seg = pb.filter(b => b[0] >= n.t && b[0] < n.t + n.d);
+        if (seg.length < 2) continue;
+        let flips = 0, prev = 0, max = 0;
+        for (let k = 1; k < seg.length; k++) { const dlt = seg[k][1] - seg[k - 1][1]; if (dlt && prev && Math.sign(dlt) !== Math.sign(prev)) flips++; if (dlt) prev = dlt; max = Math.max(max, Math.abs(seg[k][1])); }
+        if (flips >= 3 && max < 1.2) n.x = { ...(n.x || {}), vib: max > 0.4 ? 'wide' : 'slight' };
+        else if (max >= 0.4) n.x = { ...(n.x || {}), bend: { type: 'custom', max: +max.toFixed(2), pts: seg.map(b => [Math.round((b[0] - n.t) / n.d * 60), b[1]]) } };
+      }
+    }
+    // Педаль сустейна (CC 64)
+    if (cc[64] && cc[64].length) {
+      const seg = []; let down = null;
+      for (const c of cc[64]) { const on = c.value >= 0.5, tk = T(c.ticks); if (on && down == null) down = tk; else if (!on && down != null) { if (tk > down) seg.push([down, tk]); down = null; } }
+      if (seg.length) t.pedal = seg;
+    }
+    // Динамика: отмечаем заметные смены громкости (обозначения pp…ff на клавишах)
+    let lastDyn = null;
+    for (const n of notes) { const dn = velToDyn(n.v); if (dn !== lastDyn) { n.x = { ...(n.x || {}), dyn: dn, dynMark: true }; lastDyn = dn; } }
     if (isStringKind(kind)) { t.tuning = kind === 'bass' ? STD_TUNING.bass : STD_TUNING.guitar; t.fretsGuessed = true; assignFrets(notes, t.tuning, 24); }
     const hd = handFromName(name); if (hd) t.hand = hd;
     tracks.push(t);

@@ -3,6 +3,7 @@
 // падающие ноты совпадают со звуком один в один. Струна и лад — из партитуры.
 import { PPQ, kindFromProgram, programName, isStringKind } from './model.js';
 import { barOf } from './import-midi.js';
+import { dynName } from './techniques.js';
 
 export function importScore(alphaTab, bytes, fileName) {
   const settings = new alphaTab.Settings();
@@ -26,6 +27,24 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
   // Канал → дорожка партитуры
   const chTrack = new Map();
   score.tracks.forEach((t, i) => { chTrack.set(t.playbackInfo.primaryChannel, i); chTrack.set(t.playbackInfo.secondaryChannel, i); });
+  // Подтяжки (pitch bend) и педаль по каналам — так их уже рассчитал alphaTab по партитуре
+  const bendRange = new Map(), rpn = new Map(), chBends = new Map(), chPedal = new Map();
+  for (const e of evs) {
+    if (e instanceof M.ControlChangeEvent) {
+      const st = rpn.get(e.channel) || {}; rpn.set(e.channel, st);
+      if (e.controller === 101) st.msb = e.value; else if (e.controller === 100) st.lsb = e.value;
+      else if (e.controller === 6 && st.msb === 0 && st.lsb === 0) bendRange.set(e.channel, e.value);
+      else if (e.controller === 64) { if (!chPedal.has(e.channel)) chPedal.set(e.channel, []); chPedal.get(e.channel).push([T(e.tick), e.value >= 64]); }
+      continue;
+    }
+    if (e.constructor && e.constructor.name === 'PitchBendEvent' || (M.PitchBendEvent && e instanceof M.PitchBendEvent)) {
+      const range = bendRange.get(e.channel) || 2;
+      if (!chBends.has(e.channel)) chBends.set(e.channel, []);
+      const arr = chBends.get(e.channel), semi = +((e.value - 8192) / 8192 * range).toFixed(3);
+      if (!arr.length || arr[arr.length - 1][1] !== semi) arr.push([T(e.tick), semi]);
+      continue;
+    }
+  }
   for (const e of evs) {
     const type = e.type;
     if (e instanceof M.TempoChangeEvent) { tempos.push({ tick: T(e.tick), bpm: +(60000000 / e.microSecondsPerQuarterNote).toFixed(3) }); continue; }
@@ -69,8 +88,13 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
       name: (st.name || '').trim() || programName(program, kind), instrument: programName(program, kind), kind, program,
       channel: st.playbackInfo.primaryChannel, channel2: st.playbackInfo.secondaryChannel, scoreTrack: i, tuning: isStringKind(kind) && tuning ? tuning : null, notes
     };
-    if (tr.tuning || st.staves.length > 1) mapStringsAndStaves(alphaTab, lookup, st, tr, notes, div);
-    for (const n of notes) { n.bar = barOf(measures, n.t); delete n.rawTick; }
+    mapScore(alphaTab, lookup, st, tr, notes, div, kind);
+    for (const n of notes) { n.bar = barOf(measures, n.t); n.real = true; delete n.rawTick; }
+    // кривая подтяжек канала (только если в ней есть что-то кроме нуля)
+    const bends = chBends.get(st.playbackInfo.primaryChannel) || [];
+    if (bends.some(b => b[1] !== 0)) tr.bends = bends;
+    tr.pedal = pedalSegments(chPedal.get(st.playbackInfo.primaryChannel)) || pedalFromScore(lookup, st, T);
+    if (!tr.pedal || !tr.pedal.length) delete tr.pedal;
     return tr;
   }).filter(t => t.notes.length);
   if (!tracks.length) throw new Error('В файле нет нот');
@@ -78,8 +102,79 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
   return { v: 2, title, source: 'gp', tempos, measures, totalTicks, tracks };
 }
 
+function pedalSegments(ev) {
+  if (!ev || !ev.length) return null;
+  const seg = []; let down = null;
+  for (const [t, on] of ev) { if (on && down == null) down = t; else if (!on && down != null) { if (t > down) seg.push([down, t]); down = null; } }
+  return seg;
+}
+// Педаль из партитуры (если alphaTab не выдал её в MIDI)
+function pedalFromScore(lookup, scoreTrack, T) {
+  const seg = []; let down = null;
+  for (const mb of lookup.masterBars) {
+    for (const staff of scoreTrack.staves) {
+      const bar = staff.bars[mb.masterBar.index]; if (!bar || !bar.sustainPedals) continue;
+      for (const p of bar.sustainPedals) {
+        const t = T(mb.start + p.ratioPosition * (mb.end - mb.start));
+        if (p.pedalType === 0) { if (down != null && t > down) seg.push([down, t]); down = t; }
+        else if (p.pedalType === 2 && down != null) { if (t > down) seg.push([down, t]); down = null; }
+      }
+    }
+  }
+  return seg;
+}
+
+const SLIDE_OUT = [null, 'shift', 'legato', 'up', 'down', 'pickdown', 'pickup'];
+const BEND_T = [null, 'custom', 'bend', 'release', 'bendrelease', 'hold', 'prebend', 'prebendbend', 'prebendrelease'];
+const HARM = [null, 'N', 'A', 'P', 'T', 'S', 'F'];
+const ORN = [null, 'iturn', 'turn', 'umord', 'lmord'];
+const OTT = { 0: '15ma', 1: '8va', 3: '8vb', 4: '15mb' };
+// Техники ноты из модели партитуры alphaTab
+function techFrom(nt, b, kind, stringed) {
+  const x = {};
+  if (nt.isHammerPullOrigin && nt.hammerPullDestination) x.hp = nt.hammerPullDestination.realValue >= nt.realValue ? 'h' : 'p';
+  if (nt.slideOutType) {
+    x.sl = SLIDE_OUT[nt.slideOutType] || 'shift';
+    if (nt.slideTarget) x.slTo = stringed ? nt.slideTarget.fret : nt.slideTarget.realValue;
+    if (kind === 'piano') { x.gliss = true; if (nt.slideTarget) x.slTo = nt.slideTarget.realValue; }
+  }
+  if (nt.slideInType) x.slIn = nt.slideInType === 1 ? 'below' : 'above';
+  if (nt.bendType && nt.bendPoints && nt.bendPoints.length) {
+    const pts = nt.bendPoints.map(p => [p.offset, p.value / 2]);
+    x.bend = { type: BEND_T[nt.bendType] || 'custom', max: Math.max(...pts.map(p => Math.abs(p[1]))), pts };
+  }
+  const vib = nt.vibrato || b.vibrato; if (vib) x.vib = vib === 2 ? 'wide' : 'slight';
+  if (nt.trillValue > 0) x.tr = nt.trillValue;
+  if (b.tap || nt.isLeftHandTapped) x.tap = true;
+  if (nt.isPalmMute || b.isPalmMute) x.pm = true;
+  if (nt.harmonicType) x.harm = HARM[nt.harmonicType] || 'N';
+  if (b.tremoloPicking) x.trem = b.tremoloPicking.marks || 3;
+  if (nt.isDead) x.dead = true;
+  if (nt.isGhost) x.ghost = true;
+  if (nt.isLetRing || b.isLetRing) x.ring = true;
+  if (b.pickStroke) x.stroke = b.pickStroke === 1 ? 'up' : 'down';
+  if (b.brushType === 1 || b.brushType === 2) x.brush = b.brushType === 1 ? 'up' : 'down';
+  if (b.brushType === 3 || b.brushType === 4) x.arp = b.brushType === 3 ? 'up' : 'down';
+  if (b.whammyBarType && b.whammyBarPoints && b.whammyBarPoints.length) x.whammy = { type: b.whammyBarType, pts: b.whammyBarPoints.map(p => [p.offset, p.value / 2]) };
+  if (b.slap) x.slap = true;
+  if (b.pop) x.pop = true;
+  if (b.rasgueado) x.rasg = true;
+  if (nt.isStaccato) x.stacc = true;
+  if (nt.accentuated) x.acc = nt.accentuated;
+  if (nt.isSlurOrigin || b.isLegatoOrigin) x.leg = true;
+  if (nt.ornament) x.orn = ORN[nt.ornament];
+  if (b.graceType) x.grace = b.graceType === 1 ? 'on' : b.graceType === 2 ? 'before' : 'bend';
+  try { const mb = b.voice.bar.masterBar; const f = mb.getFermata && mb.getFermata(b); if (f) x.ferm = ['short', 'medium', 'long'][f.type] || 'medium'; } catch (e) { }
+  if (b.crescendo) x.cresc = b.crescendo === 1 ? 'cresc' : 'dim';
+  const dn = dynName(b.dynamics); if (dn) x.dyn = dn;
+  const prev = b.previousBeat; if (dn && (!prev || prev.dynamics !== b.dynamics || b.showDynamics)) x.dynMark = true;
+  if (b.tupletNumerator > 0 && b.tupletDenominator > 0 && b.tupletNumerator !== b.tupletDenominator) x.tup = b.tupletNumerator + ':' + b.tupletDenominator;
+  if (OTT[b.ottava] != null) x.ott = OTT[b.ottava];
+  return x;
+}
+
 // Для каждой ноты находим её в партитуре: струна/лад и номер нотного стана (руки для фортепиано)
-function mapStringsAndStaves(alphaTab, lookup, scoreTrack, tr, notes, div) {
+function mapScore(alphaTab, lookup, scoreTrack, tr, notes, div, kind) {
   const want = new Set([scoreTrack.index]);
   for (const n of notes) {
     let res = null;
@@ -103,9 +198,17 @@ function mapStringsAndStaves(alphaTab, lookup, scoreTrack, tr, notes, div) {
       return false;
     };
     if (!check(beats)) check(extra);
-    if (!found) continue;
+    if (!found) {
+      // вспомогательная нота трели: в партитуре её нет, но у ноты в этой доле есть trillValue
+      const tb = res && res.beat;
+      if (tb) for (const nt of tb.notes) if (nt.trillValue === n.m) { n.x = { trillAux: true, tr: nt.realValue }; if (tr.tuning && nt.isStringed) { const ns = tr.tuning.length; n.s = ns - nt.string; } break; }
+      continue;
+    }
     const staffIdx = found.b.voice.bar.staff.index;
     if (scoreTrack.staves.length > 1) n.h = staffIdx === 0 ? 'R' : 'L';
+    const x = techFrom(found.nt, found.b, kind, !!tr.tuning);
+    // повторы тремоло и трели — та же нота партитуры: подпись техники только у первой
+    if (Object.keys(x).length) n.x = x;
     if (tr.tuning && found.nt.isStringed) {
       // string в alphaTab считается снизу (1 = самая низкая), у нас 0 = самая высокая
       const nStr = tr.tuning.length;

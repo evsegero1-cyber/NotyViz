@@ -4,6 +4,7 @@ import { parseSongsterrPdf } from './parser.js';
 import { importMidi } from './import-midi.js';
 import { importScore } from './import-gp.js';
 import { makeTime, fromBeatSong, songSummary, KIND_LABEL, isStringKind, PPQ, GM_NAMES, GM_GROUPS } from './model.js';
+import { perform, TECH, techIds } from './techniques.js';
 import { Engine } from './engine.js';
 import { PianoView, GuitarView, DrumView, DRUM_NAMES, drumGroup, HAND, TRACK_COLORS } from './views.js';
 import { PdfView } from './pdfview.js';
@@ -120,7 +121,7 @@ async function migrate() {
 // ---------- Плеер ----------
 const P = {
   song: null, time: null, raw: null, mode: 'keys', show: [], mute: {}, gTrack: -1, oct: 0, split: 60, handMode: 'auto',
-  names: true, fullKb: false, stave: 'default', land: false, landDismissed: false, pressed: new Set(), prog: {}, speed: 1, loop: null, metro: false, keysNotes: [], fretNotes: [], scoreShown: null, vol: 0.8
+  names: true, fullKb: false, hints: true, stave: 'default', land: false, landDismissed: false, pressed: new Set(), prog: {}, speed: 1, loop: null, metro: false, keysNotes: [], fretNotes: [], scoreShown: null, vol: 0.8
 };
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5];
 const piano = new PianoView(), guitar = new GuitarView(), drumsView = new DrumView();
@@ -180,13 +181,17 @@ function prepare() {
   const tracks = song.tracks;
   const onlyPiano = P.show.every(i => tracks[i] && (tracks[i].kind === 'piano' || P.show.length === 1));
   const out = [];
+  P.pedal = [];
   for (const ti of P.show) {
     const tr = tracks[ti]; if (!tr || tr.kind === 'drums') continue;
     const tc = TRACK_COLORS[ti % TRACK_COLORS.length];
     const trCol = [tc, shadeHex(tc, -0.3), shadeHex(tc, 0.5)];
-    for (const n of tr.notes) {
-      if (n.deleted || n.tie) continue;
-      const m = n.m + 12 * P.oct; if (m < 21 || m > 108) continue;
+    // звучащие события с учётом техник (трели, арпеджио, глиссандо, стаккато…) — как в звуке
+    const perf = perform(tr, PPQ, P.oct);
+    const seen = new Set();
+    for (const e of perf.events) {
+      const n = tr.notes[e.src];
+      const m = e.m; if (m < 21 || m > 108) continue;
       let col;
       if (onlyPiano) {
         let h;
@@ -195,10 +200,27 @@ function prepare() {
         else h = m < P.split ? 'L' : 'R';
         col = HAND[h];
       } else col = trCol;
-      out.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), m, col, ti });
+      const first = !seen.has(e.src); seen.add(e.src);
+      out.push({ s: time.toSec(e.t), e: time.toSec(e.t + e.d), m, col, ti, v: e.v, x: n.x, first, src: e.src, tk: ti });
     }
+    if (tr.pedal) for (const [a, b] of tr.pedal) P.pedal.push([time.toSec(a), time.toSec(b)]);
   }
   out.sort((a, b) => a.s - b.s || a.m - b.m);
+  // крещендо/диминуэндо и триоли — подпись только в начале группы
+  const st = new Map();
+  for (const q of out) {
+    if (!q.first) continue;
+    const g = st.get(q.tk) || { cr: null, tup: null, cnt: 0 }; st.set(q.tk, g);
+    const cr = q.x && q.x.cresc || null;
+    q.crescStart = !!cr && cr !== g.cr; g.cr = cr;
+    const tp = q.x && q.x.tup || null;
+    if (tp) { if (tp !== g.tup) g.cnt = 0; q.tupStart = g.cnt % (+tp.split(':')[0] || 3) === 0; g.cnt++; } else g.cnt = 0;
+    g.tup = tp;
+    const ot = q.x && q.x.ott || null; q.ottStart = !!ot && ot !== g.ot; g.ot = ot;
+  }
+  // легато: ссылка на следующую ноту той же дорожки
+  const lastBy = new Map();
+  for (let k = out.length - 1; k >= 0; k--) { const q = out[k]; if (q.x && q.x.leg) { const nx = lastBy.get(q.tk); if (nx != null) q.nextIdx = nx; } if (q.first) lastBy.set(q.tk, k); }
   P.keysNotes = out;
   piano.setRange(out, P.fullKb);
   P.drumNotes = [];
@@ -213,9 +235,12 @@ function prepare() {
   if (gt && gt.tuning) {
     gt.notes.forEach((n, idx) => {
       if (n.deleted || n.tie || n.s == null || n.f == null) return;
-      P.fretNotes.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), m: n.m, f: n.f, st: n.s, idx });
+      P.fretNotes.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), m: n.m, f: n.f, st: n.s, idx, x: n.x });
     });
     P.fretNotes.sort((a, b) => a.s - b.s || a.st - b.st);
+    const nextOn = new Map();
+    for (let k = P.fretNotes.length - 1; k >= 0; k--) { const q = P.fretNotes[k]; if (nextOn.has(q.st)) q.next = nextOn.get(q.st); nextOn.set(q.st, k); }
+    P.gBends = perform(gt, PPQ).bends;
     guitar.setTrack(gt, P.fretNotes);
   }
 }
@@ -292,10 +317,11 @@ function frame() {
   if (P.mode === 'keys' || P.mode === 'fret' || P.mode === 'drums') {
     if (!W) resize();
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
-    const ctx = { t, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: P.loop ? { a: P.time.toSec(P.loop.ta), b: P.time.toSec(P.loop.tb) } : null };
-    if (P.mode === 'keys') piano.draw(g, W, H, { ...ctx, notes: P.keysNotes, land: P.land, pressed: P.pressed });
+    P.hot = [];
+    const ctx = { t, tick, hot: P.hints ? P.hot : null, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: P.loop ? { a: P.time.toSec(P.loop.ta), b: P.time.toSec(P.loop.tb) } : null };
+    if (P.mode === 'keys') piano.draw(g, W, H, { ...ctx, notes: P.keysNotes, land: P.land, pressed: P.pressed, pedal: P.pedal });
     else if (P.mode === 'drums') drumsView.draw(g, W, H, { ...ctx, notes: P.drumNotes, pressed: P.pressedPads });
-    else { const tr = P.song.tracks[P.gTrack]; guitar.draw(g, W, H, { ...ctx, notes: P.fretNotes, tuningNames: tuningLabels(tr) }); }
+    else { const tr = P.song.tracks[P.gTrack]; guitar.draw(g, W, H, { ...ctx, notes: P.fretNotes, tuningNames: tuningLabels(tr), bends: P.gBends }); }
   } else if (P.mode === 'pdf') {
     const act = new Set();
     const L = P.song.tracks[0].kind === 'drums' ? P.drumNotes : P.fretNotes;
@@ -359,6 +385,11 @@ $('loopSet').onclick = () => setLoop(+$('loopFrom').value, +$('loopTo').value);
 const touchKey = new Map();
 cv.addEventListener('pointerdown', e => {
   const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  if (P.hints && P.hot && P.hot.length) {
+    let best = null, bd = 1e9;
+    for (const h of P.hot) { const dx = Math.max(h.x - x, 0, x - (h.x + h.w)), dy = Math.max(h.y - y, 0, y - (h.y + h.h)); const d = Math.hypot(dx, dy); if (d < bd) { bd = d; best = h; } }
+    if (best && bd < 14) { showTech(best.ids); return; }
+  }
   if (P.mode === 'drums') {
     const m = drumsView.hit(x, y);
     if (m != null) {
@@ -517,6 +548,13 @@ function fillList() {
   const ti = P.mode === 'fret' ? P.gTrack : P.mode === 'drums' ? P.dTrack : P.show[0];
   const tr = P.song.tracks[ti]; if (!tr) return;
   const head = document.createElement('div'); head.className = 'muted small'; head.textContent = 'Дорожка: ' + tr.name; box.appendChild(head);
+  const ts = techSummary(tr);
+  const tb = document.createElement('div'); tb.className = 'tchips';
+  if (ts.length) {
+    const l = document.createElement('div'); l.className = 'muted small'; l.textContent = 'Техники в партии (нажмите, чтобы узнать подробнее):'; tb.appendChild(l);
+    for (const [id, c] of ts) { const b = document.createElement('button'); b.className = 'chip'; b.textContent = `${TECH[id].sym} ${TECH[id].name.split(' (')[0]} · ${c}`; b.onclick = () => showTech([id]); tb.appendChild(b); }
+  } else { const l = document.createElement('div'); l.className = 'muted small'; l.textContent = 'Особых техник исполнения в этой партии не найдено.'; tb.appendChild(l); }
+  box.appendChild(tb);
   const by = new Map();
   for (const n of tr.notes) { if (n.deleted || n.tie) continue; if (!by.has(n.bar)) by.set(n.bar, []); by.get(n.bar).push(n); }
   const cur = P.song.measures[P.time.measureAtSec(P.time.toSec(engine.nowTick()))].n;
@@ -874,6 +912,8 @@ function shiftTrack(i, v, unit) {
   const minT = Math.min(...tr.notes.map(n => n.t));
   if (minT + dt < 0) { dt = -minT; toast('Дорожку нельзя сдвинуть раньше начала — сдвинул до самого начала'); }
   for (const n of tr.notes) n.t += dt;
+  if (tr.bends) for (const b of tr.bends) b[0] += dt;
+  if (tr.pedal) for (const q of tr.pedal) { q[0] += dt; q[1] += dt; }
   s.totalTicks = Math.max(s.totalTicks, ...tr.notes.map(n => n.t + n.d));
   extendMeasures(s); markCustom();
   persist(true); toast(`«${tr.name}» сдвинута`);
@@ -931,3 +971,45 @@ setInterval(() => {
     $('ePlay').textContent = engine.playing ? '❚❚ Пауза' : '▶ Слушать всё';
   }
 }, 200);
+
+// =====================================================================
+// Карточки техник
+// =====================================================================
+const ANIM_HTML = {
+  bend: '<div class="ta-str"></div><div class="ta-dot a-bend"></div>', release: '<div class="ta-str"></div><div class="ta-dot a-release"></div>',
+  vibrato: '<div class="ta-str"></div><div class="ta-dot a-vib"></div>', slide: '<div class="ta-str"></div><div class="ta-dot a-slide"></div>',
+  hammer: '<div class="ta-str"></div><div class="ta-dot"></div><div class="ta-dot d2 a-hammer"></div>', pull: '<div class="ta-str"></div><div class="ta-dot"></div><div class="ta-dot d2 a-pull"></div>',
+  tap: '<div class="ta-str"></div><div class="ta-dot a-tap"></div>', mute: '<div class="ta-str a-mute"></div><div class="ta-palm"></div>',
+  harmonic: '<div class="ta-str"></div><div class="ta-dia a-glow"></div>', dead: '<div class="ta-str a-mute"></div><div class="ta-x">×</div>',
+  ghost: '<div class="ta-key a-ghost"></div>', ring: '<div class="ta-bar a-ring"></div>', up: '<div class="ta-arrow a-up">↑</div>', down: '<div class="ta-arrow a-down">↓</div>',
+  trill: '<div class="ta-key k1 a-tr1"></div><div class="ta-key k2 a-tr2"></div>', tremolo: '<div class="ta-key a-trem"></div>',
+  staccato: '<div class="ta-key a-stacc"></div>', accent: '<div class="ta-key a-acc"></div>', legato: '<div class="ta-key k1 a-leg1"></div><div class="ta-key k2 a-leg2"></div>',
+  turn: '<div class="ta-key k1 a-s1"></div><div class="ta-key k2 a-s2"></div><div class="ta-key k3 a-s3"></div>', gliss: '<div class="ta-key k1 a-s1"></div><div class="ta-key k2 a-s2"></div><div class="ta-key k3 a-s3"></div><div class="ta-key k4 a-s4"></div>',
+  grace: '<div class="ta-key k1 a-grace"></div><div class="ta-key k2 a-s2"></div>', arp: '<div class="ta-key k1 a-s1"></div><div class="ta-key k2 a-s2"></div><div class="ta-key k3 a-s3"></div>',
+  pedal: '<div class="ta-pedal a-pedal"></div>', cresc: '<div class="ta-wedge a-cresc"></div>', dim: '<div class="ta-wedge a-dim"></div>', tuplet: '<div class="ta-key k1 a-s1"></div><div class="ta-key k2 a-s2"></div><div class="ta-key k3 a-s3"></div>'
+};
+function showTech(ids) {
+  ids = [...new Set(ids)].filter(id => TECH[id]);
+  if (!ids.length) return;
+  const box = $('techBody'); box.innerHTML = '';
+  for (const id of ids.slice(0, 4)) {
+    const T = TECH[id];
+    const c = document.createElement('div'); c.className = 'tcard';
+    c.innerHTML = `<div class="thead"><div class="tsym"></div><div><div class="tname"></div><div class="tfor muted small"></div></div></div><div class="tanim">${ANIM_HTML[T.anim] || ''}</div><p class="ttext"></p><p class="thow"><b>Как играть:</b> <span></span></p>`;
+    c.querySelector('.tsym').textContent = T.sym; c.querySelector('.tname').textContent = T.name;
+    c.querySelector('.tfor').textContent = { g: 'гитара', b: 'бас-гитара', p: 'фортепиано', gp: 'гитара и фортепиано' }[T.for] || '';
+    c.querySelector('.ttext').textContent = T.text; c.querySelector('.thow span').textContent = T.how;
+    box.appendChild(c);
+  }
+  $('techSheet').classList.add('on');
+}
+window.showTech = showTech;
+$('hints').onchange = e => { P.hints = e.target.checked; ls.set('nv-hints', P.hints); };
+P.hints = ls.get('nv-hints', true); $('hints').checked = P.hints;
+// Список техник текущей дорожки (в «Нотах по тактам»)
+function techSummary(tr) {
+  const cnt = new Map();
+  for (const n of tr.notes) for (const id of techIds(n.x, tr.kind)) cnt.set(id, (cnt.get(id) || 0) + 1);
+  if (tr.pedal && tr.pedal.length) cnt.set('pedal', tr.pedal.length);
+  return [...cnt.entries()].filter(([id]) => TECH[id]).sort((a, b) => b[1] - a[1]);
+}

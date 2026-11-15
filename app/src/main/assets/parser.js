@@ -313,7 +313,33 @@ async function parsePage(page, O, pageNo) {
       voices[ri].push({ x: s.x, dur });
     }
     voices.forEach(v => v.sort((a, b) => a.x - b.x));
-    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, arcs, voices });
+    // Текстовые обозначения техник над нотами (если они есть в PDF как текст): P.M., let ring, N.H., T, L.H.…
+    const marks = [];
+    const MK = [[/^P\.?\s?M\.?$/i, 'pm'], [/^(let\s*ring|l\.\s?r\.?)$/i, 'ring'], [/^N\.?\s?H\.?$/, 'harmN'], [/^A\.?\s?H\.?$/, 'harmA'], [/^P\.?\s?H\.?$/, 'harmP'], [/^T\.?\s?H\.?$/, 'harmT'],
+      [/^T$/, 'tap'], [/^L\.?\s?H\.?$/, 'lh'], [/^R\.?\s?H\.?$/, 'rh'], [/^rasg\.?$/i, 'rasg'], [/^w\/?\s?bar$/i, 'whammy']];
+    for (const t of texts) {
+      if (t.y < top - 40 || t.y > bot + 6 || t.x < sx0 - 5 || t.x > sx1) continue;
+      const k = MK.find(([re]) => re.test(t.s)); if (!k) continue;
+      let x1 = t.x + (t.w || t.s.length * 4);
+      // продолжение «- - - -» на той же строке
+      for (const d of texts.filter(q => Math.abs(q.y - t.y) < 2 && /^[-–—\s]+$/.test(q.s) && q.x >= t.x).sort((a, b) => a.x - b.x)) { if (d.x - x1 < 25) x1 = d.x + (d.w || 4); }
+      marks.push({ kind: k[1], x0: t.x - 3, x1: x1 + 3, ranged: x1 - t.x > 40 });
+    }
+    // Значки артикуляции над станом: акцент «>», маркато «^», стаккато «•»
+    for (const o of out) {
+      if (!isGray(o.color) || o.color[0] > 200) continue;
+      for (const sb of o.subs) {
+        const b = sb.b, w = b.x1 - b.x0, h = b.y1 - b.y0, cx = (b.x0 + b.x1) / 2, ty = sb.t.join('');
+        if (b.y1 > top - 0.5 || b.y0 < top - 30 || cx < sx0 || cx > sx1) continue;
+        let kind = null;
+        if (o.kind === 'S' && ty === 'MLL' && w > h * 1.2 && w < 8 && h > 2) kind = 'acc';
+        else if (o.kind === 'S' && /^ML{3,6}$/.test(ty) && h >= w * 0.9 && w < 7 && h > 3) kind = 'marc';
+        else if (o.kind === 'F' && /^MC{4,6}Z$/.test(ty) && w < 2.2 && h < 2.2 && w > 0.7) kind = 'stacc';
+        if (kind) marks.push({ kind, x0: cx - 1, x1: cx + 1, ranged: false, sym: true });
+      }
+    }
+    // маркато рисуется поверх акцента в одной колонке — оставляем более сильное обозначение
+    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, arcs, voices, marks });
   }
   return { systems: res, texts };
 }
@@ -457,6 +483,26 @@ export function buildSong(systems, meta) {
         tie: !!n.paren, gray: !!n.gray, src: n, x: n.cx, sy });
     }
   }
+  // текстовые обозначения → техники нот
+  for (const sy of systems) for (const mk of sy.marks || []) {
+    const cand = notes.filter(n => n.sy === sy);
+    let hit;
+    if (mk.ranged) hit = cand.filter(n => n.x >= mk.x0 && n.x <= mk.x1);
+    else {
+      const cx = (mk.x0 + mk.x1) / 2; let best = 1e9;
+      for (const n of cand) best = Math.min(best, Math.abs(n.x - cx));
+      hit = best < (mk.sym ? 5 : 14) ? cand.filter(n => Math.abs(Math.abs(n.x - cx) - best) < 2.5) : [];
+    }
+    for (const n of hit) {
+      n.x2 = n.x2 || {};
+      if (mk.kind === 'lh') { n.hand = 'L'; n.x2.lh = true; }
+      else if (mk.kind === 'rh') n.hand = 'R';
+      else if (mk.kind.startsWith('harm')) n.x2.harm = mk.kind.slice(4);
+      else if (mk.kind === 'acc') n.x2.acc = Math.max(n.x2.acc || 0, 1);
+      else if (mk.kind === 'marc') n.x2.acc = 2;
+      else n.x2[mk.kind] = true;
+    }
+  }
   notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
   // Обрезка: следующая нота на той же струне прерывает звук
   for (let i = 0; i < notes.length; i++) {
@@ -493,7 +539,8 @@ export function buildSong(systems, meta) {
     outNotes.push(n);
   }
   const clean = outNotes.map(n => ({ midi: n.midi, start: +n.start.toFixed(4), dur: +n.dur.toFixed(4), string: n.string, fret: n.fret, measure: n.measure, voice: n.gray ? 1 : 0,
-    page: n.sy.page, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)) }));
+    page: n.sy.page, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)),
+    ...(n.x2 && Object.keys(n.x2).length ? { x: n.x2 } : {}), ...(n.hand ? { hand: n.hand } : {}) }));
   return {
     title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
