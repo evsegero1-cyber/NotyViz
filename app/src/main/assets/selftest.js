@@ -3,7 +3,7 @@
 // 2) настоящий рендер звука (OfflineAudioContext) и поиск атак нот в полученной записи.
 import { PPQ, makeTime } from './model.js';
 import { AudioEngine, GM_DRUMS } from './audio.js';
-import { drumNote } from './parser.js';
+import { drumNote, findRests, buildSong } from './parser.js';
 
 // Тестовая композиция: 4 инструмента, ноты на каждую долю, смена темпа 120 → 90 → 150
 export function testSong(opts = {}) {
@@ -175,9 +175,36 @@ export async function audioTests(progress) {
   return out;
 }
 
+// ---------- 4. Ритм PDF Songsterr: паузы ----------
+// Синтетический такт 4/4: половинная пауза, восьмая пауза, восьмая нота, четыре шестнадцатые (как такт 4 «Осени пьяной»)
+export function pdfRhythmTests() {
+  const ys = [100, 108, 116, 124, 132, 140], st = { top: 100, bot: 140, sp: 8, ys, sx0: 0, sx1: 300 };
+  const R4 = (x, y, w, h) => ({ t: ['M', 'L', 'L', 'L', 'L', 'Z'], b: { x0: x, y0: y, x1: x + w, y1: y + h } });
+  const P = (x, y, w, h, t) => ({ t: t.split(''), b: { x0: x, y0: y, x1: x + w, y1: y + h } });
+  const out = [{ kind: 'F', color: [22, 22, 22], subs: [
+    R4(20, 120.05, 7.9, 3.95),                        // половинная: лежит на линии 124
+    P(60, 113, 5.9, 9.8, 'MLLCCCCCCLLZ'),             // восьмая
+    R4(200, 124, 7.9, 3.95),                          // целая: висит под линией 124 (в другом такте)
+    P(230, 110, 7.2, 14.8, 'MLLCCCCCCLCCCCCCLLZ'),    // шестнадцатая
+    P(238.3, 116, 2, 2.1, 'MCCCCCC')                  // точка после неё
+  ] }];
+  const rs = findRests(out, st);
+  const kinds = rs.map(r => r.kind + ':' + r.dur).join(' ');
+  const restsOk = kinds === 'half:2 8:0.5 whole:4 16:0.375';
+  const notes = [100, 130, 150, 170, 190].map((x, i) => ({ si: 2, digits: '10', fret: 10, paren: false, x0: x - 3, x1: x + 3, cx: x, gray: false, b: { x0: x - 3, y0: 113, x1: x + 3, y1: 119 } }));
+  const sy = { page: 1, top: 100, bot: 140, sp: 8, ys, sx0: 0, sx1: 210, measures: [{ x0: 0, x1: 210, n: 1, tempo: 95, sig: [4, 4] }], tun: [],
+    notes, heads: [], dead: [], arcs: [], marks: [], rests: rs.filter(r => r.x < 210),
+    voices: [[{ x: 100, dur: 0.5 }, { x: 130, dur: 0.25 }, { x: 150, dur: 0.25 }, { x: 170, dur: 0.25 }, { x: 190, dur: 0.25 }]] };
+  const song = buildSong([sy], { title: 't', track: 'Guitar', instrument: '' });
+  const starts = song.notes.map(n => n.start).join(' ');
+  const timeOk = starts === '2.5 3 3.25 3.5 3.75';
+  return [R(9, 'Ритм PDF Songsterr: паузы', restsOk && timeOk, `паузы: ${kinds}${restsOk ? '' : ' (ожидалось half:2 8:0.5 whole:4 16:0.375)'}; ноты после паузы на долях ${starts}${timeOk ? '' : ' (ожидалось 2.5 3 3.25 3.5 3.75)'}`)];
+}
+
 export async function runAll(progress) {
   const res = [];
   res.push(...await scheduleTests());
+  try { res.push(...pdfRhythmTests()); } catch (e) { res.push(R(9, 'Ритм PDF Songsterr: паузы', false, String(e && e.message || e))); }
   const d = await drumTests(); res.push(...d.out);
   try { res.push(...await audioTests(progress)); } catch (e) { res.push(R(8, 'Рендер звука', false, String(e && e.message || e))); }
   return { results: res.sort((a, b) => a.id - b.id), drums: d.table };

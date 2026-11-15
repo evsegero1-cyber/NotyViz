@@ -58,7 +58,9 @@ export function analyze(files, refIdx) {
     if (i !== refIdx) {
       if (!it.sameTempo) warnings.push(`«${f.name}»: другой темп (${it.tempo}, у основного ${tempoText(ref)}). Выберите, как синхронизировать: по тактам или по реальному времени.`);
       if (!it.sameMeter) warnings.push(`«${f.name}»: размер или длина тактов не совпадают с основным (${it.sig}). Проверьте результат на слух.`);
-      if (it.startDiff) warnings.push(`«${f.name}»: первая нота в ${it.first}, у основного — такт ${refFirst.bar}${refFirst.beat > 1.01 ? ', доля ' + (+refFirst.beat.toFixed(2)) : ''}. Если партия вступает позже по задумке — ничего не меняйте; иначе задайте смещение или нажмите «Выровнять начало».`);
+      // партии одной песни (темп, размер и число тактов совпадают) вступают в разное время — это нормально, сдвигать не нужно
+      const sameSong = it.sameTempo && it.sameMeter && s.measures.length === ref.measures.length;
+      if (it.startDiff && !sameSong) warnings.push(`«${f.name}»: первая нота в ${it.first}, у основного — такт ${refFirst.bar}${refFirst.beat > 1.01 ? ', доля ' + (+refFirst.beat.toFixed(2)) : ''}. Если партия вступает позже по задумке — ничего не меняйте; иначе задайте смещение или нажмите «Выровнять начало».`);
     }
     return it;
   });

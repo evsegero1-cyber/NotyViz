@@ -4,6 +4,8 @@
 import TEMPLATES from './templates.js';
 
 const GW = 8, GH = 11;
+// Версия разбора: при её смене сохранённые PDF Songsterr разбираются заново (2 — паузы, глухие ноты, штили ударных)
+export const PARSER_VERSION = 2;
 
 function mul(m, n) {
   return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
@@ -160,6 +162,43 @@ function cluster(vals, tol) {
   return res.map(g => g.reduce((a, b) => a + b, 0) / g.length);
 }
 
+// Паузы Songsterr рисует залитыми контурами прямо на стане:
+//   брусок 8×4 pt — висит под линией (целая) или лежит на линии (половинная);
+//   восьмая/16-я/32-я — «флажки» с 1/2/3 кружками (контур из прямых и кривых, вытянут по высоте);
+//   четвертная — такой же вытянутый контур без кружков.
+// Справа могут стоять одна-две точки (×1,5 / ×1,75).
+export function findRests(out, st) {
+  const { top, bot, sp, ys, sx0, sx1 } = st;
+  const res = [], rdots = [];
+  for (const o of out) {
+    if (o.kind !== 'F' || !isGray(o.color) || o.color[0] > 200) continue;
+    for (const s of o.subs) {
+      const b = s.b, w = b.x1 - b.x0, h = b.y1 - b.y0, cx = (b.x0 + b.x1) / 2, ty = s.t.join('');
+      if (cx < sx0 || cx > sx1 || b.y0 < top - sp * 1.2 || b.y1 > bot + sp * 1.2) continue;
+      if (!/L/.test(ty) && /C/.test(ty) && w > 1.3 && w < 3.2 && h > 1.3 && h < 3.2 && Math.abs(w - h) < 0.6) { rdots.push(b); continue; }
+      let dur = null, kind = '';
+      const rect = ty === 'R' || /^ML{3,4}Z?$/.test(ty);
+      if (rect && w > 5.5 && w < 11 && h > 2.2 && h < 5.5) {
+        const dT = Math.min(...ys.map(y => Math.abs(b.y0 - y))), dB = Math.min(...ys.map(y => Math.abs(b.y1 - y)));
+        dur = dT < dB ? 4 : 2; kind = dur === 4 ? 'whole' : 'half';
+      } else if (/L/.test(ty) && /C/.test(ty) && h > 7.5 && h < 26 && w > 3.5 && w < 9.5 && h > w * 1.3) {
+        const blobs = (ty.match(/C{5,}/g) || []).length;
+        if (blobs) { dur = 0.5 / Math.pow(2, blobs - 1); kind = ['8', '16', '32', '64'][blobs - 1] || '64'; }
+        else { dur = 1; kind = '4'; }
+      }
+      if (dur) res.push({ x: cx, dur, kind, gray: o.color[0] > 80, b: { ...b } });
+    }
+  }
+  for (const r of res) {
+    let edge = r.b.x1, n = 0;
+    for (const d of rdots.filter(d => d.y1 > r.b.y0 - 3 && d.y0 < r.b.y1 + 3).sort((a, b) => a.x0 - b.x0)) {
+      if (d.x0 > edge - 0.3 && d.x0 < edge + 4.5 && n < 2) { n++; edge = d.x1; }
+    }
+    if (n) { r.dur *= n === 1 ? 1.5 : 1.75; r.dots = n; }
+  }
+  return res;
+}
+
 // Разбор одной страницы: станы, такты, ноты-цифры, штили, лиги
 async function parsePage(page, O, pageNo) {
   const out = await walkPage(page, O);
@@ -191,7 +230,8 @@ async function parsePage(page, O, pageNo) {
     const k = Math.round(l.y * 4) / 4; const e = byY.get(k) || { y: l.y, len: 0, x0: 1e9, x1: -1e9 };
     e.len += l.x1 - l.x0; e.x0 = Math.min(e.x0, l.x0); e.x1 = Math.max(e.x1, l.x1); byY.set(k, e);
   }
-  const lines = [...byY.values()].filter(e => e.len > 120 && e.x1 - e.x0 > 150).sort((a, b) => a.y - b.y);
+  // короткие станы тоже: последняя строка из 2–4 тактов бывает уже 150 pt, а линия струны рвётся цифрами
+  const lines = [...byY.values()].filter(e => e.len > 45 && e.x1 - e.x0 > 55).sort((a, b) => a.y - b.y);
   // Группы равноотстоящих линий → станы
   const staves = [];
   let grp = [];
@@ -279,9 +319,40 @@ async function parsePage(page, O, pageNo) {
         arcs.push(b);
       }
     }
-    // Штили и балки ритма (под станом)
-    const stemsRaw = vl.filter(v => v.x > sx0 && v.x < sx1 && v.y1 > bot + 4 && v.y1 < bot + 70 &&
-      ((v.y0 > bot - 1.5 && v.y1 - v.y0 < 30) || (heads.length && v.y0 < bot && v.y1 - v.y0 < 110)));
+    // Паузы на стане: целая/половинная (брусок), восьмая, шестнадцатая, тридцать вторая, четвертная; точки после паузы
+    const rests = findRests(out, { top, bot, sp, ys, sx0, sx1 });
+    // глифы, совпавшие с паузой, нотами не считаем
+    const inRest = g => rests.some(r => g.cx > r.b.x0 - 0.5 && g.cx < r.b.x1 + 0.5 && g.cy > r.b.y0 - 0.5 && g.cy < r.b.y1 + 0.5);
+    for (let i = notes.length - 1; i >= 0; i--) if (inRest({ cx: notes[i].cx, cy: (notes[i].b.y0 + notes[i].b.y1) / 2 })) notes.splice(i, 1);
+    // Глухие ноты табулатуры (крестик на струне)
+    const dead = [];
+    for (const h of heads) {
+      if (h.kind !== 'x' && h.kind !== 'xbig') continue;
+      const cy = (h.b.y0 + h.b.y1) / 2, si = strIdx({ cy });
+      if (si >= 0) dead.push({ si, dead: true, paren: false, digits: 'x', fret: 0, x0: h.b.x0, x1: h.b.x1, cx: (h.b.x0 + h.b.x1) / 2, gray: h.gray, b: { ...h.b } });
+    }
+    // Точки удлинения у головок ударных (стоят справа от головки на стане)
+    const hdots = [];
+    if (heads.length) for (const o of out) {
+      if (o.kind !== 'F' || !isGray(o.color) || o.color[0] > 200) continue;
+      for (const s of o.subs) {
+        const b = s.b, w = b.x1 - b.x0, h = b.y1 - b.y0;
+        if (/L/.test(s.t.join('')) || w < 1.4 || w > 3.4 || h < 1.4 || h > 3.4 || Math.abs(w - h) > 0.6) continue;
+        if (b.y0 < top - sp * 3.5 || b.y1 > bot + sp * 2.5) continue;
+        hdots.push(b);
+      }
+    }
+    // Штили и балки ритма (под станом). Штиль ударных нарисован несколькими перекрывающимися кусками — склеиваем.
+    const vm = [];
+    for (const v of [...vl].sort((a, b) => a.x - b.x || a.y0 - b.y0)) {
+      const p = vm.length && vm[vm.length - 1];
+      let q = null;
+      for (let k = vm.length - 1; k >= 0 && vm[k].x > v.x - 0.3; k--) if (v.y0 <= vm[k].y1 + 1.2 && v.y1 >= vm[k].y0 - 1.2) { q = vm[k]; break; }
+      if (q && p) { q.y0 = Math.min(q.y0, v.y0); q.y1 = Math.max(q.y1, v.y1); } else vm.push({ ...v });
+    }
+    const stemsRaw = vm.filter(v => v.x > sx0 && v.x < sx1 && v.y1 > bot + 4 && v.y1 < bot + 70 &&
+      ((v.y0 > bot - 1.5 && v.y0 < bot + 20 && v.y1 - v.y0 < 30) || (heads.length && v.y0 < bot && v.y1 - v.y0 < 110)));
+    // (штиль начинается сразу под станом; вертикальные чёрточки ниже — концы «P.M. ---|» следующей строки)
     const stems = [];
     for (const v of stemsRaw.sort((a, b) => (b.y1 - b.y0) - (a.y1 - a.y0))) {
       // одинаковые штили (заливка + обводка) и куски одного штиля у ударных
@@ -309,7 +380,12 @@ async function parsePage(page, O, pageNo) {
       let dur = (!heads.length && h < Math.max(full * 0.7, sp * 1.1)) ? 2 : 1;
       const k = Math.max(nb, nf);
       if (k) dur = 1 / Math.pow(2, k);
-      if (dots.some(d => d.x0 > s.x + 0.3 && d.x0 < s.x + 5 && d.y1 > s.y1 - 4 && d.y0 < s.y1 + 2)) dur *= 1.5;
+      let dotted = dots.some(d => d.x0 > s.x + 0.3 && d.x0 < s.x + 5 && d.y1 > s.y1 - 4 && d.y0 < s.y1 + 2);
+      if (!dotted && heads.length) {
+        const hs = heads.filter(h => (Math.abs(h.b.x0 - s.x) < 2.6 || Math.abs(h.b.x1 - s.x) < 2.6) && (h.b.y0 + h.b.y1) / 2 > s.y0 - 4 && (h.b.y0 + h.b.y1) / 2 < s.y1);
+        dotted = hdots.some(d => hs.some(h => d.x0 > h.b.x1 + 0.2 && d.x0 < h.b.x1 + 5 && Math.abs((d.y0 + d.y1) / 2 - (h.b.y0 + h.b.y1) / 2) < sp * 0.75));
+      }
+      if (dotted) dur *= 1.5;
       voices[ri].push({ x: s.x, dur });
     }
     voices.forEach(v => v.sort((a, b) => a.x - b.x));
@@ -339,7 +415,7 @@ async function parsePage(page, O, pageNo) {
       }
     }
     // маркато рисуется поверх акцента в одной колонке — оставляем более сильное обозначение
-    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, arcs, voices, marks });
+    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, dead, arcs, voices, marks, rests });
   }
   return { systems: res, texts };
 }
@@ -443,16 +519,28 @@ export function buildSong(systems, meta) {
     const sy = m.sy;
     const inM = x => x >= m.x0 - 0.5 && x < m.x1 - 0.5;
     const mNotes = sy.notes.filter(n => inM(n.cx));
-    // Ритм голосов этого такта
-    const vts = sy.voices.map(v => {
-      const ev = v.filter(s => inM(s.x)).map(s => ({ ...s }));
-      let sum = ev.reduce((a, e) => a + e.dur, 0);
+    if (!isDrum) for (const d of sy.dead || []) if (inM(d.cx) && !mNotes.some(n => n.si === d.si && Math.abs(n.cx - d.cx) < 2)) mNotes.push(d);
+    // Ритм голосов этого такта: штили + паузы. Паузу отдаём голосу, которому не хватает длительности.
+    const evs = sy.voices.map(v => v.filter(s => inM(s.x)).map(s => ({ ...s })));
+    const mRests = (sy.rests || []).filter(r => inM(r.x));
+    if (!evs.length && mRests.length) evs.push([]);
+    const sumOf = ev => ev.reduce((a, e) => a + e.dur, 0);
+    for (const r of [...mRests].sort((a, b) => b.dur - a.dur || a.x - b.x)) {
+      let bi = -1, bd = -1;
+      evs.forEach((ev, i) => { const d = m.len - sumOf(ev); if (d >= r.dur - 0.01 && d > bd + 0.01) { bd = d; bi = i; } });
+      if (bi < 0) { m.restMismatch = (m.restMismatch || 0) + 1; continue; }
+      evs[bi].push({ x: r.x, dur: r.dur, rest: true });
+    }
+    const vts = evs.map(ev => {
+      ev.sort((a, b) => a.x - b.x);
+      let sum = sumOf(ev);
       let t = 0;
       const deficit = m.len - sum;
       if (deficit > 0.01 && ev.length && ev[0].x - m.x0 > (m.x1 - m.x0) * 0.22) t = deficit;
-      if (sum > m.len + 0.01) { const k = m.len / sum; ev.forEach(e => e.dur *= k); }
+      if (sum > m.len + 0.01) { const k = m.len / sum; ev.forEach(e => e.dur *= k); m.squeezed = true; }
+      else if (deficit > 0.01 && ev.some(e => !e.rest)) m.short = true;
       for (const e of ev) { e.t = t; t += e.dur; }
-      return ev;
+      return ev.filter(e => !e.rest);
     });
     // Колонки (ноты с одинаковым x)
     const cols = cluster(mNotes.map(n => n.cx), 2.6).map(x => ({ x }));
@@ -480,7 +568,7 @@ export function buildSong(systems, meta) {
       const midi = isDrum ? n.drum : tuning[n.si] + n.fret;
       if (isDrum) dur = Math.min(dur, 0.5);
       notes.push({ midi, string: n.si, fret: n.fret, start: m.start + c.t, dur: Math.max(0.05, dur), measure: m.n,
-        tie: !!n.paren, gray: !!n.gray, src: n, x: n.cx, sy });
+        tie: !!n.paren, gray: !!n.gray, src: n, x: n.cx, sy, ...(n.dead ? { x2: { dead: true } } : {}) });
     }
   }
   // текстовые обозначения → техники нот
@@ -544,9 +632,9 @@ export function buildSong(systems, meta) {
     page: n.sy.page, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)),
     ...(n.x2 && Object.keys(n.x2).length ? { x: n.x2 } : {}), ...(n.hand ? { hand: n.hand } : {}) }));
   return {
-    title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
+    pv: PARSER_VERSION, title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
-    measures: ms.map(m => ({ n: m.n, start: m.start, len: m.len, tempo: m.tempo, sig: m.sig })),
+    measures: ms.map(m => ({ n: m.n, start: m.start, len: m.len, tempo: m.tempo, sig: m.sig, ...(m.squeezed || m.short || m.restMismatch ? { rhythmCheck: true } : {}) })),
     totalBeats: total, notes: clean, unknown
   };
 }

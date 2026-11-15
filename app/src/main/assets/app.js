@@ -1,6 +1,6 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
 import * as alphaTab from './lib/alphatab/alphaTab.min.mjs';
-import { parseSongsterrPdf } from './parser.js';
+import { parseSongsterrPdf, PARSER_VERSION } from './parser.js';
 import { recognizePdf } from './omr.js';
 import { importMidi } from './import-midi.js';
 import { importScore } from './import-gp.js';
@@ -148,6 +148,24 @@ async function openSong(id) {
   if (engine.playing) engine.pause();
   P.song = song; P.time = makeTime(song); P.raw = null;
   if (song.source !== 'midi') P.raw = await idb.get('files', id);
+  // PDF Songsterr, разобранный старой версией: разбираем заново (если ноты не правили вручную)
+  if (song.source === 'pdf' && !song.omr && !song.omrReport && song.tracks.length === 1 && (song.pv || 1) < PARSER_VERSION && P.raw) {
+    const edited = song.tracks.some(t => t.notes.some(n => n.edited || n.deleted));
+    if (!edited) {
+      try {
+        busy(true, 'Обновляю разбор файла…');
+        const fresh = fromBeatSong(await parseSongsterrPdf(pdfjsLib, P.raw.slice()));
+        if (fresh.tracks[0].notes.length) {
+          const tr = fresh.tracks[0], o = song.tracks[0];
+          for (const k of ['name', 'program', 'hand', 'channel']) if (o[k] != null) tr[k] = o[k];
+          Object.assign(song, { pv: fresh.pv, tempos: fresh.tempos, measures: fresh.measures, totalTicks: fresh.totalTicks, tracks: fresh.tracks });
+          await idb.put('songs', song.id, song); await idb.put('meta', song.id, songSummary(song));
+          toast('Файл разобран заново: учтены паузы и ритм ударных');
+        }
+      } catch (e) { console.warn(e); }
+      busy(false);
+    }
+  }
   const set = ls.get('nv-set-' + id, {});
   const tracks = song.tracks;
   P.oct = set.oct || 0; P.split = set.split || 60; P.handMode = set.handMode || 'auto';

@@ -199,7 +199,7 @@ export function fromBeatSong(old) {
     tuning: drum ? null : old.tuning, tuningNames: drum ? null : old.tuningNames, notes
   };
   const hd = handFromName(track.name + ' ' + track.instrument); if (hd) track.hand = hd;
-  const song = { v: 2, id: old.id, title: old.title, source: 'pdf', tempos, measures, totalTicks: B(old.totalBeats), tracks: [track] };
+  const song = { v: 2, id: old.id, title: old.title, source: 'pdf', pv: old.pv, tempos, measures, totalTicks: B(old.totalBeats), tracks: [track] };
   assignChannels(song.tracks);
   return song;
 }
