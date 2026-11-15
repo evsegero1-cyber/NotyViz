@@ -30,7 +30,7 @@ export class Engine {
       if (was !== this.playing) this.onState(this.playing ? 'play' : 'pause');
     });
     api.playerFinished.on(() => this.onState('finished'));
-    api.midiLoaded.on(() => { this.onState('midi'); if (this.pendingTick != null) { const t = this.pendingTick; this.pendingTick = null; setTimeout(() => this.seekTick(t), 0); } this.applyChannels(); });
+    api.midiLoaded.on(() => { this.onState('midi'); if (this.pendingTick != null) { const t = this.pendingTick, r = this.resume; this.pendingTick = null; this.resume = false; setTimeout(() => { this.seekTick(t); if (r) this.play(); }, 0); } this.applyChannels(); });
   }
   get player() { return this.api.player; }
 
@@ -39,17 +39,39 @@ export class Engine {
     this.song = song; this.time = time; this.scoreLoaded = false; this.score = null;
     this.tick = 0; this.stamp = performance.now();
     this.channelState = this.channelState || {};
-    if (song.source === 'gp' && gpBytes) {
+    if (song.source === 'gp' && gpBytes && !song.custom) {
       const settings = this.api.settings;
       this.score = this.at.importer.ScoreLoader.loadScoreFromBytes(gpBytes, settings);
-      const M = this.at.midi; const mf = new M.MidiFile();
-      new M.MidiFileGenerator(this.score, settings, new M.AlphaSynthMidiFileHandler(mf, true)).generate();
-      this.k = PPQ / (mf.division || PPQ);
-      this.player.loadMidiFile(mf);
+      this.applyScorePrograms();
+      this.loadScoreMidi();
     } else {
       this.k = 1;
-      this.player.loadMidiFile(buildMidiFile(this.at, song));
+      this.player.loadMidiFile(buildMidiFile(this.at, song, { prog: this.prog }));
     }
+  }
+  loadScoreMidi() {
+    const M = this.at.midi; const mf = new M.MidiFile();
+    new M.MidiFileGenerator(this.score, this.api.settings, new M.AlphaSynthMidiFileHandler(mf, true)).generate();
+    this.k = PPQ / (mf.division || PPQ);
+    this.player.loadMidiFile(mf);
+  }
+  applyScorePrograms() {
+    if (!this.score || !this.song) return;
+    this.origProg = this.origProg && this.origProg.score === this.score ? this.origProg : { score: this.score, p: this.score.tracks.map(t => t.playbackInfo.program) };
+    this.song.tracks.forEach((tr, i) => {
+      const st = this.score.tracks[tr.scoreTrack]; if (!st || tr.kind === 'drums') return;
+      st.playbackInfo.program = this.prog && this.prog[i] != null ? this.prog[i] : this.origProg.p[tr.scoreTrack];
+    });
+  }
+  // Звучание дорожек: номер инструмента General MIDI для каждой
+  setPrograms(prog) {
+    this.prog = prog || {};
+    if (!this.song) return;
+    if (this.score) {
+      this.applyScorePrograms();
+      this.pendingTick = this.tick; this.resume = this.playing;
+      if (this.scoreLoaded) this.api.loadMidiForScore(); else this.loadScoreMidi();
+    } else { this.pendingTick = this.tick; this.resume = this.playing; this.player.loadMidiFile(buildMidiFile(this.at, this.song, { prog: this.prog })); }
   }
   // Нотный вид (только Guitar Pro / MusicXML): alphaTab рисует партитуру и сам пересоздаёт MIDI
   showScore(trackIdx, stave) {
@@ -57,15 +79,16 @@ export class Engine {
     const st = this.api.settings.display;
     st.staveProfile = stave === 'tab' ? this.at.StaveProfile.Tab : stave === 'score' ? this.at.StaveProfile.Score : this.at.StaveProfile.Default;
     this.api.updateSettings();
-    this.pendingTick = this.tick / this.k;
+    this.pendingTick = this.tick; this.resume = this.playing;
     this.api.renderScore(this.score, [trackIdx]);
     this.scoreLoaded = true;
     return true;
   }
   rebuildMidi(song) {
-    if (song.source === 'gp' && this.score) return;
-    this.song = song; this.pendingTick = this.tick;
-    this.player.loadMidiFile(buildMidiFile(this.at, song));
+    this.song = song; this.pendingTick = this.tick; this.resume = this.playing;
+    if (song.source === 'gp' && this.score && !song.custom) return;
+    this.score = null; this.scoreLoaded = false; this.k = 1;
+    this.player.loadMidiFile(buildMidiFile(this.at, song, { prog: this.prog }));
   }
 
   nowTick() {
@@ -96,6 +119,8 @@ export class Engine {
       if (this.score && this.score.tracks[tr.scoreTrack]) { const pi = this.score.tracks[tr.scoreTrack].playbackInfo; chs.push(pi.primaryChannel, pi.secondaryChannel); }
       for (const ch of new Set(chs)) {
         p.setChannelMute(ch, !!(st.mute && st.mute[i]));
+        p.setChannelVolume(ch, tr.volume != null ? tr.volume : 1);
+        p.setChannelSolo(ch, st.solo === i);
         if (tr.kind !== 'drums') p.setChannelTranspositionPitch(ch, (st.oct || 0) * 12);
       }
     });

@@ -35,28 +35,40 @@ export class PianoView {
     if (full) { lo = 21; hi = 108; } else {
       lo = Math.max(21, lo - 1); while (lo % 12 !== 0 && lo % 12 !== 5) lo--;
       hi = Math.min(108, hi + 1); while (hi % 12 !== 11 && hi % 12 !== 4) hi++;
-      while (countWhite(lo, hi) < 15) { if (lo > 21) lo--; if (hi < 108) hi++; if (lo <= 21 && hi >= 108) break; }
+      while (countWhite(lo, hi) < (this.minWhite || 15)) { if (lo > 21) lo--; if (hi < 108) hi++; if (lo <= 21 && hi >= 108) break; }
     }
     this.lo = lo; this.hi = hi; this.W = 0;
   }
-  layout(W, H) {
-    if (this.W === W && this.H === H) return; this.W = W; this.H = H;
+  // Пропорции как у настоящего пианино: чёрные клавиши делят группы до–ми на 5 частей и фа–си на 7,
+  // ширина чёрной ≈ 0,58 белой, длина ≈ 0,63 белой
+  layout(W, H, land) {
+    if (this.W === W && this.H === H && this.land === land) return; this.W = W; this.H = H; this.land = land;
     this.keys = new Map();
     const nw = countWhite(this.lo, this.hi), ww = W / nw;
-    this.KB = Math.min(Math.max(90, H * 0.24), 170, ww * 7);
+    this.KB = land ? Math.max(60, Math.min(ww * 6.3, H * 0.36)) : Math.min(Math.max(90, H * 0.24), 170, ww * 7);
+    this.blackH = this.KB * 0.63;
     let i = 0;
     for (let m = this.lo; m <= this.hi; m++) if (!isBlack(m)) { this.keys.set(m, { x: i * ww, w: ww, black: false }); i++; }
-    for (let m = this.lo; m <= this.hi; m++) if (isBlack(m)) { const L = this.keys.get(m - 1); if (L) this.keys.set(m, { x: L.x + ww * 0.68, w: ww * 0.64, black: true }); }
+    const OFF = { 1: [0, 0.6], 3: [0, 1.8], 6: [5, 0.571], 8: [5, 1.714], 10: [5, 2.857] };
+    for (let m = this.lo; m <= this.hi; m++) if (isBlack(m)) {
+      const pc = m % 12, [basePc, off] = OFF[pc];
+      const base = this.keys.get(m - pc + basePc);
+      let x;
+      if (base) x = base.x + off * ww;
+      else { const L = this.keys.get(m - 1); if (!L) continue; x = L.x + ww * 0.68; }
+      this.keys.set(m, { x, w: ww * 0.58, black: true });
+    }
   }
   hit(x, y) {
     if (y < this.H - this.KB) return null;
-    for (const [m, k] of this.keys) if (k.black && x >= k.x && x < k.x + k.w && y < this.H - this.KB + (this.KB - 5) * 0.62) return m;
+    for (const [m, k] of this.keys) if (k.black && x >= k.x && x < k.x + k.w && y < this.H - this.KB + 3 + this.blackH) return m;
     for (const [m, k] of this.keys) if (!k.black && x >= k.x && x < k.x + k.w) return m;
     return null;
   }
   draw(g, W, H, ctx) {
-    this.layout(W, H);
+    this.layout(W, H, !!ctx.land);
     const { t, notes, speed, names } = ctx;
+    const pressed = ctx.pressed || new Set();
     g.fillStyle = '#0f1115'; g.fillRect(0, 0, W, H);
     const fallH = H - this.KB;
     const win = Math.max(1.2, Math.min(4, 3 * speed));
@@ -91,6 +103,7 @@ export class PianoView {
     const ky = fallH, KB = this.KB;
     g.fillStyle = '#000'; g.fillRect(0, ky, W, KB);
     g.fillStyle = '#3a3f4a'; g.fillRect(0, ky, W, 3);
+    for (const m of pressed) if (!active.has(m)) active.set(m, ['#9cc5ff', '#6fa6e8', '#cfe3ff']);
     for (const [m, k] of this.keys) if (!k.black) {
       const c = active.get(m);
       rr(g, k.x + 1, ky + 3, k.w - 2, KB - 5, 4);
@@ -105,7 +118,7 @@ export class PianoView {
     }
     for (const [m, k] of this.keys) if (k.black) {
       const c = active.get(m);
-      rr(g, k.x, ky + 3, k.w, (KB - 5) * 0.62, 3);
+      rr(g, k.x, ky + 3, k.w, this.blackH, 3);
       g.fillStyle = c ? c[1] : '#1c1d21'; g.fill();
     }
   }

@@ -82,7 +82,12 @@ input[type=number]{width:76px}
 .nbox{position:absolute;border:1.5px solid rgba(76,154,255,.75);border-radius:3px;background:rgba(76,154,255,.08)}
 .nbox.edited{border-color:#3ccf8e;background:rgba(60,207,142,.15)}
 .nbox.on{background:rgba(255,138,61,.45);border-color:#ff8a3d}
-.trow{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line)}
+.trow{display:flex;flex-direction:column;gap:8px;padding:10px 2px;border-bottom:1px solid var(--line)}
+.trow-top{display:flex;align-items:center;gap:10px}
+.tbtns{display:flex;gap:6px;flex:none}
+.trow-prog{display:flex;align-items:center;gap:10px;padding-left:22px}
+.trow-prog select{flex:1;min-width:0}
+.proglab{flex:none}
 .trow .grow{flex:1;min-width:0}
 .trow .grow div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trow .dot{width:12px;height:12px;border-radius:3px;flex:none}
@@ -94,3 +99,40 @@ input[type=number]{width:76px}
 .at-selection div{background:rgba(64,64,255,.1)}
 .at-cursor-beat{background:rgba(76,154,255,.85);width:3px}
 .at-highlight *{fill:#0078ff;stroke:#0078ff}
+
+/* Полноэкранный альбомный режим клавиатуры */
+.landbtn{flex:0 0 auto!important;min-width:44px;font-size:18px!important;color:var(--tx)!important}
+.landbar,.landprog{display:none}
+body.land .pbar,body.land .modes,body.land .ctrl{display:none!important}
+body.land #player{background:#0f1115}
+body.land .landbar{display:flex;position:absolute;top:calc(6px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));gap:4px;align-items:center;
+  background:rgba(23,26,33,.82);border:1px solid var(--line);border-radius:22px;padding:3px 6px;z-index:4;backdrop-filter:blur(4px)}
+body.land .landbar button{background:none;border:none;padding:6px 8px;font-size:15px;min-width:34px;border-radius:16px}
+body.land .landbar button.on{background:rgba(76,154,255,.25);color:#9cc5ff}
+body.land .landbar .lplay{background:var(--acc);color:#fff;width:36px;height:36px;border-radius:50%;padding:0}
+body.land .lpos{font-size:12px;color:var(--mut);min-width:62px;text-align:center;font-variant-numeric:tabular-nums}
+body.land .landprog{display:block;position:absolute;left:0;right:0;top:0;height:16px;z-index:3;border-top:3px solid rgba(255,255,255,.07)}
+body.land .landprog div{position:absolute;top:-3px;left:0;height:3px;width:0;background:var(--acc)}
+
+#mergeBtn{background:var(--bg3)}
+.mbody{flex:1;overflow-y:auto;padding:8px 14px 16px}
+.wide{width:100%}
+input[type=text]{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.fcard{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:12px;margin:12px 0}
+.fcard.ref{border-color:var(--acc)}
+.fhead{display:flex;align-items:center;gap:8px}
+.fhead b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.finfo{font-size:13px;color:var(--mut);margin:6px 0;line-height:1.55}
+.frow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0}
+.frow select{max-width:100%}
+.trk{display:grid;grid-template-columns:auto 1fr;gap:6px 8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.trk input[type=text]{width:100%}
+.trk .sub{grid-column:2;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.trk select{flex:1;min-width:0}
+.warn{background:rgba(255,210,63,.1);border:1px solid rgba(255,210,63,.4);color:#ffe28a;border-radius:10px;padding:8px 10px;font-size:13px;margin:8px 0}
+.okmsg{background:rgba(60,207,142,.1);border:1px solid rgba(60,207,142,.35);color:#9ff0c8;border-radius:10px;padding:8px 10px;font-size:13px;margin:8px 0}
+.etr{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin:10px 0;display:flex;flex-direction:column;gap:8px}
+.etr .row{gap:8px;flex-wrap:wrap}
+.etr input[type=range]{flex:1}
+.etr .vol{min-width:44px;text-align:right;font-size:13px;color:var(--mut)}
+input[type=number].sm{width:70px}

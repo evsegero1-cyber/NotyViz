@@ -15,6 +15,13 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import android.content.ClipData;
+import android.content.pm.ActivityInfo;
+import android.os.Build;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import java.io.OutputStream;
 
 import androidx.webkit.WebViewAssetLoader;
 
@@ -26,6 +33,8 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
 
     private static final int REQ_OPEN = 1;
+    private static final int REQ_MULTI = 2;
+    private static final int REQ_SAVE = 3;
     private static final String START = "https://appassets.androidplatform.net/assets/index.html";
 
     private WebView web;
@@ -36,6 +45,12 @@ public class MainActivity extends Activity {
     // Последний открытый файл ждёт, пока страница его заберёт
     private volatile byte[] fileData = null;
     private volatile String fileName = "";
+    // Несколько файлов для объединения
+    private final java.util.List<byte[]> multiData = new java.util.ArrayList<>();
+    private final java.util.List<String> multiNames = new java.util.ArrayList<>();
+    // Файл, который ждёт сохранения (экспорт)
+    private byte[] saveData = null;
+    private boolean landscapeLocked = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -144,6 +159,62 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_OPEN && resultCode == RESULT_OK && data != null && data.getData() != null) {
             loadUri(data.getData());
+        } else if (requestCode == REQ_MULTI && resultCode == RESULT_OK && data != null) {
+            final java.util.List<Uri> uris = new java.util.ArrayList<>();
+            ClipData clip = data.getClipData();
+            if (clip != null) for (int i = 0; i < clip.getItemCount(); i++) uris.add(clip.getItemAt(i).getUri());
+            else if (data.getData() != null) uris.add(data.getData());
+            io.execute(() -> {
+                synchronized (multiData) {
+                    multiData.clear(); multiNames.clear();
+                    for (Uri u : uris) {
+                        try (InputStream in = getContentResolver().openInputStream(u)) {
+                            if (in == null) continue;
+                            multiData.add(readAll(in)); multiNames.add(queryName(u));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+                runOnUiThread(() -> web.evaluateJavascript("window.onFilesReady && window.onFilesReady()", null));
+            });
+        } else if (requestCode == REQ_SAVE) {
+            boolean ok = false;
+            if (resultCode == RESULT_OK && data != null && data.getData() != null && saveData != null) {
+                try (OutputStream out = getContentResolver().openOutputStream(data.getData())) {
+                    out.write(saveData); ok = true;
+                } catch (Exception e) {
+                    Toast.makeText(this, "Не удалось сохранить: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            }
+            saveData = null;
+            web.evaluateJavascript("window.onSaved && window.onSaved(" + ok + ")", null);
+        }
+    }
+
+    // Полноэкранный альбомный режим
+    private void applyLandscape(boolean on, boolean rotate) {
+        if (rotate || !on) {
+            landscapeLocked = on && rotate;
+            setRequestedOrientation(on ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE : ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode = on ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+            getWindow().setAttributes(lp);
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                if (on) {
+                    c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                    c.hide(WindowInsets.Type.systemBars());
+                } else c.show(WindowInsets.Type.systemBars());
+            }
+        } else {
+            int flags = on ? (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION) : 0;
+            getWindow().getDecorView().setSystemUiVisibility(flags);
         }
     }
 
@@ -207,6 +278,72 @@ public class MainActivity extends Activity {
                     Toast.makeText(MainActivity.this, "Нет приложения для выбора файлов", Toast.LENGTH_LONG).show();
                 }
             });
+        }
+
+        @JavascriptInterface
+        public void openPickerMulti() {
+            runOnUiThread(() -> {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");
+                i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                try {
+                    startActivityForResult(i, REQ_MULTI);
+                } catch (Exception e) {
+                    Toast.makeText(MainActivity.this, "Нет приложения для выбора файлов", Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public int getFilesCount() {
+            synchronized (multiData) { return multiData.size(); }
+        }
+
+        @JavascriptInterface
+        public String getFileAt(int i) {
+            synchronized (multiData) { return i < multiData.size() ? Base64.encodeToString(multiData.get(i), Base64.NO_WRAP) : ""; }
+        }
+
+        @JavascriptInterface
+        public String getFileNameAt(int i) {
+            synchronized (multiData) { return i < multiNames.size() ? multiNames.get(i) : ""; }
+        }
+
+        @JavascriptInterface
+        public void clearFiles() {
+            synchronized (multiData) { multiData.clear(); multiNames.clear(); }
+        }
+
+        @JavascriptInterface
+        public void saveFile(String name, String mime, String b64) {
+            saveData = Base64.decode(b64, Base64.DEFAULT);
+            runOnUiThread(() -> {
+                Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType(mime);
+                i.putExtra(Intent.EXTRA_TITLE, name);
+                try {
+                    startActivityForResult(i, REQ_SAVE);
+                } catch (Exception e) {
+                    Toast.makeText(MainActivity.this, "Нет приложения для сохранения файлов", Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void setLandscape(boolean on) {
+            runOnUiThread(() -> applyLandscape(on, true));
+        }
+
+        @JavascriptInterface
+        public void setImmersive(boolean on) {
+            runOnUiThread(() -> applyLandscape(on, false));
+        }
+
+        @JavascriptInterface
+        public boolean isLandscapeLocked() {
+            return landscapeLocked;
         }
 
         @JavascriptInterface

@@ -15,6 +15,7 @@
     <div><h1>NotyViz</h1><p class="muted">Ноты и табы → клавиатура и гриф</p></div>
   </header>
   <button id="importBtn" class="primary big">Импортировать файл</button>
+  <button id="mergeBtn" class="big">Объединить файлы</button>
   <p class="muted small">PDF-табулатуры Songsterr, MIDI (.mid), Guitar Pro (.gp, .gp3, .gp4, .gp5, .gpx) и MusicXML. Файл можно открыть и из «Загрузок» или через «Поделиться» → NotyViz.</p>
   <div id="soundState" class="muted small"></div>
   <h2 class="sec">Последние</h2>
@@ -35,11 +36,23 @@
     <button data-mode="fret">Гриф</button>
     <button data-mode="score">Ноты</button>
     <button data-mode="pdf">Оригинал</button>
+    <button id="landBtn" class="landbtn" aria-label="Во весь экран">⛶</button>
   </div>
   <div id="stage">
     <canvas id="cv"></canvas>
     <div id="scoreWrap" class="pane"><div id="scoreBar" class="scorebar"><button data-stave="default" class="chip on">Ноты + табы</button><button data-stave="score" class="chip">Ноты</button><button data-stave="tab" class="chip">Табы</button></div><div id="scoreMsg" class="muted pad"></div><div id="at"></div></div>
     <div id="pdfWrap" class="pane"></div>
+    <div id="landBar" class="landbar">
+      <button id="lExit" aria-label="Выйти из полноэкранного режима">✕</button>
+      <button id="lPrev" aria-label="Такт назад">⏮</button>
+      <button id="lPlay" class="lplay" aria-label="Играть">▶</button>
+      <button id="lNext" aria-label="Такт вперёд">⏭</button>
+      <span id="lPos" class="lpos">Такт 1</span>
+      <button id="lSpeed">100%</button>
+      <button id="lLoop">⟲</button>
+      <button id="lSet" aria-label="Настройки">⚙</button>
+    </div>
+    <div id="landProg" class="landprog"><div></div></div>
   </div>
   <div class="ctrl">
     <div class="row">
@@ -55,6 +68,50 @@
       <button id="loopBtn" class="chip">Повтор</button>
       <button id="metroBtn" class="chip">Метроном</button>
     </div>
+  </div>
+</section>
+
+
+<section id="merge" class="screen">
+  <header class="pbar">
+    <button id="mBack" class="icon" aria-label="Назад">‹</button>
+    <div class="ptitle"><div>Объединение файлов</div><div id="mSub" class="muted small"></div></div>
+  </header>
+  <div class="mbody">
+    <label class="lbl">Название композиции</label>
+    <input type="text" id="mTitle" class="wide">
+    <div id="mWarn"></div>
+    <div id="mFiles"></div>
+    <button id="mAdd" class="wide">+ Добавить файл</button>
+    <p class="muted small">Основной файл задаёт темп и такты. Остальные партии подстраиваются под него. Исходные файлы не меняются.</p>
+  </div>
+  <div class="ctrl">
+    <div class="row"><span id="mPos" class="pos">0:00</span><input type="range" id="mSeek" min="0" max="1000" value="0"><span id="mDur" class="pos right"></span></div>
+    <div class="row btns"><button id="mPlay" class="chip">▶ Прослушать</button><button id="mSave" class="primary">Объединить и сохранить</button></div>
+  </div>
+  <input type="file" id="mergeInput" accept=".pdf,.mid,.midi,.gp,.gp3,.gp4,.gp5,.gpx,.gp7,.xml,.musicxml,.mxl,application/pdf,audio/midi" multiple hidden>
+</section>
+
+<section id="editor" class="screen">
+  <header class="pbar">
+    <button id="eBack" class="icon" aria-label="Назад">‹</button>
+    <div class="ptitle"><div>Редактор композиции</div><div id="eSub" class="muted small"></div></div>
+    <button id="eDone" class="chip">Готово</button>
+  </header>
+  <div class="mbody">
+    <label class="lbl">Название</label>
+    <input type="text" id="eTitle" class="wide">
+    <label class="lbl">Темп всей композиции</label>
+    <div class="row gap"><input type="number" id="eTempo" min="25" max="300" value="100" inputmode="numeric"><span>%</span><button id="eTempoSet" class="chip">Применить</button><span id="eBpm" class="muted small"></span></div>
+    <label class="lbl">Дорожки</label>
+    <div id="eTracks"></div>
+    <label class="lbl">Экспорт (отдельные дорожки сохраняются)</label>
+    <div class="row gap"><button id="eMidi" class="chip">Сохранить MIDI</button><button id="eXml" class="chip">Сохранить MusicXML</button></div>
+    <div style="height:20px"></div>
+  </div>
+  <div class="ctrl">
+    <div class="row"><span id="ePos" class="pos">0:00</span><input type="range" id="eSeek" min="0" max="1000" value="0"><span id="eDur" class="pos right"></span></div>
+    <div class="row btns"><button id="ePlay" class="chip">▶ Слушать всё</button><button id="eSoloOff" class="chip">Все дорожки</button></div>
   </div>
 </section>
 
@@ -101,6 +158,7 @@
     <div class="sheet-head"><b>Дорожки</b><button class="icon" data-close>✕</button></div>
     <p class="muted small">«Показ» — какие дорожки видны на клавишах (на грифе — одна). «Звук» — отключить или включить инструмент.</p>
     <div id="tList"></div>
+    <button id="toEditor" class="wide" style="margin-top:14px">Редактор композиции: громкость, темп, сдвиг, удаление, экспорт</button>
   </div>
 </div>
 
