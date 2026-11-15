@@ -15,3 +15,7 @@ kit/    — Virtuosity Drums (Virtuosity Musical Instruments, барабанщи
 gm/     — GeneralUser GS v2.0, S. Christian Collins. GeneralUser GS License v2.0
           (разрешено использование и распространение, в том числе в приложениях).
           https://github.com/mrbumpy409/GeneralUser-GS
+cab/    — импульсы гитарных кабинетов, Jester Dyne Productions (freesound.org/people/jesterdyne). CC0 1.0.
+          v30_even, v30_brutal — Behringer BG412S, Celestion Vintage 30, Shure SM57 («Brutal Pack»);
+          4x12_vintage, 2x12_blackpanel — пакет «Speaker Impulse Responses» (freesound.org/people/jesterdyne/packs/6385).
+          (в приложении: укорочены до 60 мс, 44,1 кГц)

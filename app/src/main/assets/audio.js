@@ -74,7 +74,7 @@ export const FX_PRESETS = {
   clean: { label: 'Clean', amp: 'clean', drive: 0.12, cab: true, chorus: 0.2, delay: 0, delayTime: 0.36, reverb: 0.2, low: 1, mid: 0, high: 2 },
   crunch: { label: 'Overdrive', amp: 'od', drive: 0.45, cab: true, chorus: 0, delay: 0, delayTime: 0.36, reverb: 0.14, low: 1, mid: 2, high: 1 },
   dist: { label: 'Distortion', amp: 'dist', drive: 0.75, cab: true, chorus: 0, delay: 0, delayTime: 0.36, reverb: 0.12, low: 2, mid: -2, high: 1 },
-  lead: { label: 'Lead', amp: 'dist', drive: 0.85, cab: true, chorus: 0, delay: 0.22, delayTime: 0.38, reverb: 0.2, low: 1, mid: 1, high: 1 },
+  lead: { label: 'Lead', amp: 'dist', ir: 'v30_brutal.wav', drive: 0.85, cab: true, chorus: 0, delay: 0.22, delayTime: 0.38, reverb: 0.2, low: 1, mid: 1, high: 1 },
   acoustic: { label: 'Акустика', amp: null, reverb: 0.2, low: 0, mid: 0, high: 1 },
   bass: { label: 'Бас', amp: 'bass', drive: 0.08, cab: true, reverb: 0.04, low: 2, mid: 0, high: 0 },
   drums: { label: 'Ударные', amp: null, reverb: 0.1, low: 0, mid: 0, high: 0 },
@@ -92,6 +92,24 @@ function curve(kind, amount) {
   }
   return c;
 }
+// Ламповая характеристика: несимметричное мягкое ограничение (смещение рабочей точки даёт чётные гармоники,
+// поэтому звук «тёплый», а не прямоугольный, как у синтезатора)
+function tubeCurve(bias, k) {
+  const n = 4096, c = new Float32Array(n), t0 = Math.tanh(k * bias);
+  const m = Math.max(Math.tanh(k * (1 + bias)) - t0, t0 - Math.tanh(k * (bias - 1)));
+  for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = (Math.tanh(k * (x + bias)) - t0) / m; }
+  return c;
+}
+// Голоса усилителя. stages: усиление (g0 + g1·drive), смещение и крутизна каскада, срезы между каскадами
+const AMP_VOICE = {
+  clean: { inHp: 70, inLp: 9000, tight: null, stages: [{ g0: 1.1, g1: 1.5, bias: 0.12, k: 1.2, hp: 60, lp: 9000 }],
+    low: 1, midF: 600, mid: -1, high: 1, power: 1.1, presence: 1, ir: '2x12_blackpanel.wav', out: 21 },
+  od: { inHp: 90, inLp: 7500, tight: [720, 6], stages: [{ g0: 3, g1: 6, bias: 0.2, k: 1.4, hp: 140, lp: 7000 }, { g0: 1.5, g1: 2.5, bias: -0.12, k: 1.3, hp: 80, lp: 6500 }],
+    low: 0, midF: 650, mid: -1, high: 0, power: 1.3, presence: 2, ir: '4x12_vintage.wav', out: 10 },
+  dist: { inHp: 110, inLp: 6500, tight: [800, 5], stages: [{ g0: 4, g1: 8, bias: 0.18, k: 1.5, hp: 220, lp: 7500 }, { g0: 2.5, g1: 5, bias: -0.14, k: 1.5, hp: 90, lp: 6500 }, { g0: 1.2, g1: 1, bias: 0.06, k: 1.2, hp: 60, lp: 7000 }],
+    low: 1, midF: 550, mid: -3, high: 0, power: 1.4, presence: 2, ir: 'v30_even.wav', out: 2.5 },
+};
+
 function biq(ctx, type, f, g = 0, q = 0.707) { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.gain.value = g; b.Q.value = q; return b; }
 function chainNodes(nodes) { for (let i = 0; i + 1 < nodes.length; i++) nodes[i].connect(nodes[i + 1]); return nodes; }
 
@@ -112,24 +130,44 @@ class TrackChain {
     const lo = this.eng.quality === 'eco';
     let cur = this.input;
     const add = (...ns) => { for (const n of ns) { cur.connect(n); cur = n; this.nodes.push(n); } };
-    if (p.amp && p.ampOn !== false) {
-      const kind = p.amp;
+    if (p.amp && p.ampOn !== false && p.amp === 'bass') {
       const drive = Math.max(0, Math.min(1, p.drive || 0));
-      // предусилитель: срез низа перед перегрузом (у дисторшна — плотнее), затем ограничитель
-      add(biq(ctx, 'highpass', kind === 'dist' ? 140 : kind === 'bass' ? 30 : 90, 0, 0.7));
-      if (kind === 'od') add(biq(ctx, 'peaking', 720, 6 * drive + 2, 0.9)); // «тьюб-скример»: подъём середины до перегруза
-      const pre = ctx.createGain(); pre.gain.value = kind === 'dist' ? 2 + drive * 6 : kind === 'od' ? 1.5 + drive * 4 : 1 + drive * 2; add(pre);
-      const ws = ctx.createWaveShaper(); ws.curve = curve(kind === 'clean' || kind === 'bass' ? 'soft' : kind, drive); ws.oversample = lo ? '2x' : '4x'; add(ws);
-      if (kind === 'dist') { const ws2 = ctx.createWaveShaper(); ws2.curve = curve('od', 0.5); ws2.oversample = lo ? 'none' : '2x'; add(biq(ctx, 'lowpass', 6500, 0, 0.7), ws2); }
-      // тембр-блок усилителя
-      add(biq(ctx, 'lowshelf', 120, p.low || 0), biq(ctx, 'peaking', kind === 'dist' ? 650 : 900, p.mid || 0, 0.8), biq(ctx, 'highshelf', 2800, p.high || 0));
-      // кабинет 4×12 (для баса 1×15): характерная АЧХ динамика
+      add(biq(ctx, 'highpass', 30, 0, 0.7));
+      const pre = ctx.createGain(); pre.gain.value = 1 + drive * 2; add(pre);
+      const ws = ctx.createWaveShaper(); ws.curve = curve('bass', drive); ws.oversample = lo ? '2x' : '4x'; add(ws);
+      add(biq(ctx, 'lowshelf', 120, p.low || 0), biq(ctx, 'peaking', 900, p.mid || 0, 0.8), biq(ctx, 'highshelf', 2800, p.high || 0));
+      if (p.cab !== false) add(biq(ctx, 'peaking', 90, 3, 1), biq(ctx, 'peaking', 800, -2, 1), biq(ctx, 'lowpass', 4200, 0, 0.8));
+      const post = ctx.createGain(); post.gain.value = 0.9 * Math.pow(10, (p.gain || 0) / 20); add(post);
+      const c = ctx.createDynamicsCompressor(); c.threshold.value = -20; c.ratio.value = 4; c.attack.value = 0.01; c.release.value = 0.2; add(c);
+    } else if (p.amp && p.ampOn !== false) {
+      // Гитарный усилитель: каскады предусилителя (как лампы 12AX7: несимметричное ограничение,
+      // между каскадами срез низа и верха), темброблок, оконечник, затем настоящий кабинет (импульс 4×12 / 2×12).
+      const kind = p.amp, drive = Math.max(0, Math.min(1, p.drive || 0));
+      const V = AMP_VOICE[kind] || AMP_VOICE.clean;
+      add(biq(ctx, 'highpass', V.inHp, 0, 0.5));
+      if (V.tight) add(biq(ctx, 'peaking', V.tight[0], V.tight[1] * (0.5 + drive * 0.5), 0.8)); // подъём середины перед перегрузом (собирает низ)
+      add(biq(ctx, 'lowpass', V.inLp, 0, 0.6));                                                  // убирает «песок» медиатора до перегруза
+      V.stages.forEach((st, i) => {
+        const g = ctx.createGain(); g.gain.value = st.g0 + st.g1 * drive; add(g);
+        const ws = ctx.createWaveShaper(); ws.curve = tubeCurve(st.bias, st.k); ws.oversample = lo ? (i ? 'none' : '2x') : '4x'; add(ws);
+        add(biq(ctx, 'highpass', st.hp, 0, 0.5), biq(ctx, 'lowpass', st.lp, 0, 0.6));     // разделительный конденсатор и ёмкость Миллера
+      });
+      // темброблок (как у Marshall: впадина на середине) + ручки «низ/середина/верх»
+      add(biq(ctx, 'lowshelf', 150, V.low + (p.low || 0)), biq(ctx, 'peaking', V.midF, V.mid + (p.mid || 0), 0.7), biq(ctx, 'highshelf', 3000, V.high + (p.high || 0)));
+      // оконечный каскад: мягкое ограничение, «присутствие» и резонанс динамика
+      const pw = ctx.createWaveShaper(); pw.curve = tubeCurve(0.05, V.power); pw.oversample = lo ? 'none' : '2x'; add(pw);
+      add(biq(ctx, 'peaking', 3600, V.presence, 0.9));
       if (p.cab !== false) {
-        if (kind === 'bass') add(biq(ctx, 'peaking', 90, 3, 1), biq(ctx, 'peaking', 800, -2, 1), biq(ctx, 'lowpass', 4200, 0, 0.8));
-        else add(biq(ctx, 'highpass', 75, 0, 0.8), biq(ctx, 'peaking', 110, 3, 1.2), biq(ctx, 'peaking', 400, -3, 0.9), biq(ctx, 'peaking', 2400, 4, 1.4), biq(ctx, 'lowpass', 4800, 0, 1.0), biq(ctx, 'lowpass', 7000, 0, 0.6));
+        const cv = ctx.createConvolver(); cv.normalize = true;
+        const ir = p.ir || V.ir;
+        const b = this.eng.cabBuf(ir);
+        if (b) { cv.buffer = b; add(cv); }
+        else { // кабинет ещё не загружен: временно фильтры, потом подменим
+          add(biq(ctx, 'peaking', 110, 3, 1.2), biq(ctx, 'peaking', 2400, 3, 1.4), biq(ctx, 'lowpass', 4800, 0, 1.0), biq(ctx, 'lowpass', 6000, 0, 0.7));
+          this.eng.loadCab(ir).then(() => { if (this.params === p) this.set(params); }).catch(() => { });
+        }
       }
-      const post = ctx.createGain(); post.gain.value = (kind === 'dist' ? 0.32 : kind === 'od' ? 0.5 : kind === 'bass' ? 0.9 : 0.85) * Math.pow(10, (p.gain || 0) / 20); add(post);
-      if (kind === 'bass') { const c = ctx.createDynamicsCompressor(); c.threshold.value = -20; c.ratio.value = 4; c.attack.value = 0.01; c.release.value = 0.2; add(c); }
+      const post = ctx.createGain(); post.gain.value = V.out * Math.pow(10, (p.gain || 0) / 20); add(post);
     } else {
       add(biq(ctx, 'lowshelf', 120, p.low || 0), biq(ctx, 'peaking', 1000, p.mid || 0, 0.8), biq(ctx, 'highshelf', 5000, p.high || 0));
     }
@@ -239,6 +277,26 @@ function pickRegion(inst, m, v, rrState, trig) {
   return cands[k % cands.length];
 }
 
+// Живая игра медиатором: аккорд звучит не одним ударом, а «проходом» по струнам
+// (вниз — с толстой струны, на слабую долю вверх — с тонкой), сила чуть разная от ноты к ноте.
+// Одиночные ноты по времени не сдвигаются. Разброс детерминированный — каждый раз звучит одинаково.
+export function humanizeStrums(evs, tracks, ppq) {
+  const byKey = new Map();
+  for (const e of evs) {
+    const tr = tracks[e.tr]; if (!tr || (tr.kind !== 'eguitar' && tr.kind !== 'aguitar' && tr.kind !== 'guitar')) continue;
+    const h = ((e.t * 7919 + e.m * 104729 + e.tr * 31) % 1000) / 1000;      // псевдослучайное 0..1
+    e.v = Math.max(1, Math.min(127, Math.round(e.v + (h - 0.5) * 10)));
+    const k = e.tr + ':' + e.t; if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(e);
+  }
+  for (const grp of byKey.values()) {
+    if (grp.length < 2) continue;
+    const up = (grp[0].t % ppq) === ppq / 2 && grp.length < 5;                // «и» доли — удар вверх
+    grp.sort((a, b) => up ? b.m - a.m : a.m - b.m);
+    const step = Math.min(0.009, 0.026 / grp.length);                        // весь проход ≤ ~25 мс
+    grp.forEach((e, i) => { if (!i) return; const d = i * step; e.s += d; e.e = Math.max(e.e, e.s + 0.02); e.v = Math.max(1, e.v - i * 2); });
+  }
+}
+
 // ---------------- Движок ----------------
 export class AudioEngine {
   constructor() {
@@ -251,6 +309,13 @@ export class AudioEngine {
     this.LOOK = 0.3; this.TICK_MS = 25;
     this.onEnd = null; this.onLoad = null;
     this.timer = null;
+  }
+  // импульсы кабинетов (snd/cab): грузятся один раз
+  cabBuf(name) { return (this.cabs || (this.cabs = new Map())).get(name) || null; }
+  loadCab(name) {
+    this.cabP = this.cabP || new Map();
+    if (!this.cabP.has(name)) this.cabP.set(name, fetch('snd/cab/' + name).then(r => r.arrayBuffer()).then(ab => this.ctx.decodeAudioData(ab)).then(b => { (this.cabs || (this.cabs = new Map())).set(name, b); return b; }));
+    return this.cabP.get(name);
   }
   // для тестов: свой контекст (OfflineAudioContext) или «сухой» режим без звука с журналом планирования
   useContext(ctx) { this.ctx = null; this.ensureCtx(ctx); return this; }
@@ -302,6 +367,7 @@ export class AudioEngine {
       }
       tr._bends = bends && bends.length ? bends : null;
     });
+    humanizeStrums(evs, song.tracks, PPQ);
     evs.sort((a, b) => a.s - b.s || a.tr - b.tr || a.m - b.m);
     evs.forEach((e, i) => e.i = i);
     this.events = evs; this.cursor = 0;
@@ -359,6 +425,8 @@ export class AudioEngine {
     if (!drum && has('pm') && tb.group === 'bass' && tb.pack === 'bass') { try { res.muted = await this.bank.program('bass', 'muted', needFor(false)); } catch (e) { } }
     if (!drum && tb.group === 'bass' && evs.some(e => e.slap)) { try { res.slap = await this.bank.program('gm', '36', needFor(false)); res.pop = await this.bank.program('gm', '37', needFor(false)); } catch (e) { } }
     const preset = st.fx || tb.fx || (tb.group === 'piano' ? 'piano' : 'none');
+    const pv = Object.assign({}, FX_PRESETS[preset] || {}, st.fxParams || {});
+    if (pv.amp && pv.amp !== 'bass' && pv.cab !== false) { try { await this.loadCab(pv.ir || (AMP_VOICE[pv.amp] || AMP_VOICE.clean).ir); } catch (e) { } }
     this.chains[ti].set(Object.assign({ preset }, st.fxParams || {}));
     this.chains[ti].out.gain.value = Math.pow(10, (tb.gain || 0) / 20); // выравнивание громкости тембров
     this.stats.perTrack[ti].timbre = tb.name;
