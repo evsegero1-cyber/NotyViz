@@ -24,7 +24,10 @@ export const TIMBRES = [
   { id: 'tine', gain: -2, name: 'Электропиано (Tine)', group: 'piano', pack: 'gm', prog: '4', fx: 'ep' },
   { id: 'cp70', name: 'Электрический рояль (CP-70)', group: 'piano', pack: 'gm', prog: '2' },
   { id: 'fmep', gain: -2, name: 'Электропиано FM (DX7)', group: 'piano', pack: 'gm', prog: '5', fx: 'ep' },
-  { id: 'egtr_amp', gain: 0, name: 'Электрогитара — Marshall (запись через усилитель)', group: 'guitar', pack: 'egtra', prog: 'notes', fx: 'amped', chords: true },
+  { id: 'egtr_amp', gain: 2, name: 'Электрогитара — Marshall JCM2000 (через усилитель)', group: 'guitar', pack: 'egtra', prog: 'notes', fx: 'amped', chords: true },
+  { id: 'egtr_jcm900', gain: 1, name: 'Электрогитара — Marshall JCM900 (через усилитель)', group: 'guitar', pack: 'egtr_jcm900', prog: 'notes', fx: 'amped', chords: true },
+  { id: 'egtr_mesa', gain: 3, name: 'Электрогитара — Mesa/Boogie Mark IV (через усилитель)', group: 'guitar', pack: 'egtr_mesa', prog: 'notes', fx: 'amped', chords: true },
+  { id: 'egtr_5150', gain: 3, name: 'Электрогитара — Peavey 5150 (через усилитель)', group: 'guitar', pack: 'egtr_5150', prog: 'notes', fx: 'amped', chords: true },
   { id: 'egtr_clean', gain: 1, name: 'Электрогитара — Clean', group: 'guitar', pack: 'egtr', prog: 'notes', fx: 'clean' },
   { id: 'egtr_crunch', gain: -3, name: 'Электрогитара — Overdrive', group: 'guitar', pack: 'egtr', prog: 'notes', fx: 'crunch' },
   { id: 'egtr_dist', gain: -3, name: 'Электрогитара — Distortion', group: 'guitar', pack: 'egtr', prog: 'notes', fx: 'dist' },
@@ -33,6 +36,7 @@ export const TIMBRES = [
   { id: 'nylon', gain: 4, name: 'Классическая гитара (нейлон)', group: 'guitar', pack: 'gm', prog: '24', fx: 'acoustic' },
   { id: 'jazz', gain: 1, name: 'Джазовая гитара', group: 'guitar', pack: 'gm', prog: '26', fx: 'clean' },
   { id: 'bass_finger', name: 'Бас — пальцами (Jazz Bass)', group: 'bass', pack: 'bass', prog: 'finger', fx: 'bass' },
+  { id: 'bass_amp', gain: 1, name: 'Бас — через преамп Tech21 dUg (запись)', group: 'bass', pack: 'bassamp', prog: 'finger', fx: 'amped' },
   { id: 'bass_muted', name: 'Бас — приглушённый', group: 'bass', pack: 'bass', prog: 'muted', fx: 'bass' },
   { id: 'bass_pick', name: 'Бас — медиатором', group: 'bass', pack: 'gm', prog: '34', fx: 'bass' },
   { id: 'bass_slap', name: 'Бас — слэп', group: 'bass', pack: 'gm', prog: '36', fx: 'bass' },
@@ -81,7 +85,7 @@ export const FX_PRESETS = {
   bass: { label: 'Бас', amp: 'bass', drive: 0.08, cab: true, reverb: 0.04, low: 2, mid: 0, high: 0 },
   drums: { label: 'Ударные', amp: null, reverb: 0.1, low: 0, mid: 0, high: 0 },
 };
-export const FX_FOR_GROUP = { piano: ['piano', 'ep', 'none'], guitar: ['amped', 'clean', 'crunch', 'dist', 'lead', 'acoustic', 'none'], bass: ['bass', 'none'], drums: ['drums', 'none'], gm: ['none', 'clean', 'crunch', 'dist'] };
+export const FX_FOR_GROUP = { piano: ['piano', 'ep', 'none'], guitar: ['amped', 'clean', 'crunch', 'dist', 'lead', 'acoustic', 'none'], bass: ['bass', 'amped', 'none'], drums: ['drums', 'none'], gm: ['none', 'clean', 'crunch', 'dist'] };
 
 function curve(kind, amount) {
   const n = 2048, c = new Float32Array(n);
@@ -383,7 +387,7 @@ export class AudioEngine {
         // педаль сустейна: снятие ноты откладывается до снятия педали
         if (ped.length && tr.kind !== 'drums') for (const [a, b] of ped) if (endT > a && endT < b) { endT = b; break; }
         const x = n && n.x || {};
-        const ev = { tr: ti, s: time.toSec(e.t), e: time.toSec(endT), m: e.m, v: Math.max(1, Math.min(127, Math.round(e.v || 96))), ch: e.ch || null, str: n ? n.s : null, x, t: e.t, tEnd: endT };
+        const ev = { src: e.src, tr: ti, s: time.toSec(e.t), e: time.toSec(endT), m: e.m, v: Math.max(1, Math.min(127, Math.round(e.v || 96))), ch: e.ch || null, str: n ? n.s : null, x, t: e.t, tEnd: endT };
         if (x.hp || (x.sl === 'legato')) ev.legato = true;
         if (x.slap || x.pop) ev.slap = x.pop ? 'pop' : 'slap';
         evs.push(ev);
@@ -444,7 +448,7 @@ export class AudioEngine {
     // тембры техник
     const has = ch => evs.some(e => e.ch === ch);
     if (!drum && has('dead')) {
-      try { res.dead = tb.pack === 'egtr' || tb.pack === 'egtra' ? await this.bank.program(tb.pack, 'dead') : tb.group === 'bass' ? await this.bank.program('bass', 'muted', needFor(false)) : await this.bank.program('gm', '28', needFor(false)); } catch (e) { }
+      try { res.dead = tb.pack === 'egtr' || tb.chords ? await this.bank.program(tb.pack, 'dead') : tb.group === 'bass' ? await this.bank.program('bass', 'muted', needFor(false)) : await this.bank.program('gm', '28', needFor(false)); } catch (e) { }
     }
     if (!drum && tb.chords) {
       res.chords = {};
@@ -455,7 +459,7 @@ export class AudioEngine {
       if (has('pm')) { try { res.pmNotes = await this.bank.program(tb.pack, 'pm', needFor(false)); } catch (e) { } }
     }
     if (!drum && has('harm')) { try { res.harm = await this.bank.program('gm', '31', needFor(false)); } catch (e) { } }
-    if (!drum && has('pm') && tb.group === 'bass' && tb.pack === 'bass') { try { res.muted = await this.bank.program('bass', 'muted', needFor(false)); } catch (e) { } }
+    if (!drum && has('pm') && tb.group === 'bass' && (tb.pack === 'bass' || tb.pack === 'bassamp')) { try { res.muted = await this.bank.program(tb.pack, 'muted', needFor(false)); } catch (e) { } }
     if (!drum && tb.group === 'bass' && evs.some(e => e.slap)) { try { res.slap = await this.bank.program('gm', '36', needFor(false)); res.pop = await this.bank.program('gm', '37', needFor(false)); } catch (e) { } }
     const preset = st.fx || tb.fx || (tb.group === 'piano' ? 'piano' : 'none');
     const pv = Object.assign({}, FX_PRESETS[preset] || {}, st.fxParams || {});
@@ -575,6 +579,7 @@ export class AudioEngine {
         // повтор: новый якорь — начало фрагмента звучит ровно в момент конца фрагмента
         const ct = this.ctxAtSong(loopB, a), sa = this.time.toSec(this.loop.a);
         const na = { ctx: ct, sec: sa, speed: a.speed };
+        if (this.onLoopWrap) { const ns = this.onLoopWrap(); if (ns && ns !== a.speed) { na.speed = ns; this.speed = ns; } }
         this.anchors.push(na); if (this.anchors.length > 4) this.anchors.splice(0, this.anchors.length - 4);
         this.cursor = this.indexAt(sa); this.mCursor = this.mIndexAt(sa);
         // заглушить хвосты нот, которые тянутся через конец фрагмента
@@ -638,6 +643,7 @@ export class AudioEngine {
       return;
     }
     if (e.skip) return; // нота пауэр-аккорда, который звучит цельной записью
+    if (this.userPart && this.userPart(e)) return; // эту партию играет ученик
     // струнные: одна струна — один голос (новая нота на той же струне гасит предыдущую)
     const strKey = isStringKind(tr.kind) && e.str != null ? e.tr + ':' + e.str : null;
     let legato = false;
@@ -743,6 +749,26 @@ export class AudioEngine {
       const at = this.ctxAtSong(this.time.toSec(bends[i][0]), a);
       if (at > when) s.detune.setValueAtTime(bends[i][1] * 100, at);
     }
+  }
+  // Живая игра (MIDI-клавиатура, экранные клавиши): нота звучит, пока клавиша нажата
+  liveOn(m, vel, timbreId) {
+    const ctx = this.ensureCtx(); if (ctx.state !== 'running') ctx.resume();
+    const tb = timbreFor(timbreId || 'grand'), preset = tb.fx || (tb.group === 'piano' ? 'piano' : 'none');
+    this.live = this.live || new Map();
+    const key = m, seq = (this.liveSeq = (this.liveSeq || 0) + 1); this.live.set(key, { seq });
+    return this.bank.program(tb.pack, tb.prog, r => r.lk - 3 <= m && r.hk + 3 >= m).then(inst => {
+      const st = this.live.get(key); if (!st || st.seq !== seq) return; // уже отпустили
+      if (!this.liveChain) this.liveChain = new TrackChain(this);
+      if (this.livePreset !== preset) { this.liveChain.set({ preset }); this.livePreset = preset; }
+      this.liveChain.out.gain.value = Math.pow(10, (tb.gain || 0) / 20);
+      const t = ctx.currentTime + 0.005;
+      st.v = this.playRegionNote(inst, m, Math.max(1, Math.min(127, vel || 100)), t, t + 20, this.liveChain.input, null, null);
+    }).catch(() => { });
+  }
+  liveOff(m) {
+    const st = this.live && this.live.get(m); if (!st) return;
+    this.live.delete(m);
+    if (st.v) this.release(st.v, this.ctx.currentTime, 0.12);
   }
   previewNote(m, timbreId, drum, dur) {
     const ctx = this.ensureCtx(); if (ctx.state !== 'running') ctx.resume();

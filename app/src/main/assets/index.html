@@ -16,10 +16,12 @@
   </header>
   <button id="importBtn" class="primary big">Импортировать файл</button>
   <button id="mergeBtn" class="big">Объединить файлы</button>
-  <button id="tunerBtn" class="big">🎸 Тюнер</button>
+  <div class="row gap2"><button id="tunerBtn" class="big">🎸 Тюнер</button><button id="metroHome" class="big">🥁 Метроном</button></div>
   <p class="muted small">PDF-табулатуры Songsterr, MIDI (.mid), Guitar Pro (.gp, .gp3, .gp4, .gp5, .gpx) и MusicXML. Файл можно открыть и из «Загрузок» или через «Поделиться» → NotyViz.</p>
   <div id="soundState" class="muted small"></div>
-  <h2 class="sec">Последние</h2>
+  <h2 class="sec">Мои композиции</h2>
+  <input type="search" id="libSearch" class="wide" placeholder="Поиск по названию">
+  <div id="libFilter" class="libfilter"></div>
   <div id="recent"></div>
   <input type="file" id="fileInput" accept=".pdf,.mid,.midi,.gp,.gp3,.gp4,.gp5,.gpx,.gp7,.xml,.musicxml,.mxl,application/pdf,audio/midi" hidden>
 </section>
@@ -52,10 +54,12 @@
       <span id="lPos" class="lpos">Такт 1</span>
       <button id="lSpeed">100%</button>
       <button id="lLoop">⟲</button>
+      <button id="lPrac" aria-label="Разучивание">🎯</button>
       <button id="lMode" aria-label="Другой вид">🎸</button>
       <button id="lSet" aria-label="Настройки">⚙</button>
     </div>
     <div id="landProg" class="landprog"><div></div></div>
+    <div id="hud" class="hud"></div>
   </div>
   <div class="ctrl">
     <div class="row">
@@ -70,6 +74,7 @@
       <button id="speedBtn" class="chip">100%</button>
       <button id="loopBtn" class="chip">Повтор</button>
       <button id="metroBtn" class="chip">Метроном</button>
+      <button id="pracBtn" class="chip">🎯 Учить</button>
     </div>
   </div>
 </section>
@@ -87,6 +92,23 @@
     <div id="tuStrings" class="tustrings"></div>
     <button id="tuAuto" class="chip on tuauto">Авто</button>
     <p class="muted small tuhint">Нажмите на струну — прозвучит её нота, и тюнер будет слушать только её. Зелёная галочка — струна настроена.</p>
+  </div>
+</section>
+
+<section id="metro" class="screen">
+  <header class="pbar">
+    <button id="mtBack" class="icon" aria-label="Назад">‹</button>
+    <div class="ptitle"><div>Метроном</div><div class="muted small">Работает и без композиции</div></div>
+  </header>
+  <div class="mtbody">
+    <div id="mtDots" class="mtdots"></div>
+    <div class="mtbpm"><span id="mtBpm">100</span><small>ударов в минуту · <span id="mtName"></span></small></div>
+    <div class="row mtrow"><button id="mtMinus5">−5</button><button id="mtMinus">−1</button><input type="range" id="mtRange" min="20" max="300" value="100"><button id="mtPlus">+1</button><button id="mtPlus5">+5</button></div>
+    <div class="row mtrow"><button id="mtPlay" class="primary mtplay">▶ Старт</button><button id="mtTap" class="mttap">Тап</button></div>
+    <label class="lbl">Размер</label><div id="mtMeter" class="seg"></div>
+    <label class="lbl">Щелчки</label><div id="mtSub" class="seg"></div>
+    <label class="row check"><input type="checkbox" id="mtAccent" checked> Акцент на первую долю</label>
+    <p class="muted small">«Тап» — постучите в ритм несколько раз, темп подстроится.</p>
   </div>
 </section>
 
@@ -149,7 +171,7 @@
   <div class="sheet-body">
     <div class="sheet-head"><b>Настройки</b><button class="icon" data-close>✕</button></div>
 
-    <div class="row btns"><button id="soundBtn" class="chip on">🎚 Звуки и инструменты</button><button id="tunerBtn2" class="chip">🎸 Тюнер</button><button id="diagBtn" class="chip">Диагностика и тесты</button><button id="omrBtn" class="chip">Отчёт распознавания</button></div>
+    <div class="row btns"><button id="soundBtn" class="chip on">🎚 Звуки и инструменты</button><button id="tunerBtn2" class="chip">🎸 Тюнер</button><button id="metroBtn2" class="chip">🥁 Метроном</button><button id="diagBtn" class="chip">Диагностика и тесты</button><button id="omrBtn" class="chip">Отчёт распознавания</button></div>
 
     <label class="lbl">Скорость</label>
     <div class="seg" id="speedSeg"></div>
@@ -247,6 +269,45 @@
     <div class="sheet-head"><b>Результат распознавания нот</b><button class="icon" data-close>✕</button></div>
     <div id="omrBody" class="omr-body"></div>
     <div class="row gap" style="margin-top:14px"><button id="omrCheck" class="primary">Сверить с оригиналом</button><button data-close>Готово</button></div>
+  </div>
+</div>
+
+<div id="pracSheet" class="sheet">
+  <div class="sheet-body tall">
+    <div class="sheet-head"><b>Разучивание</b><button class="icon" data-close>✕</button></div>
+    <label class="lbl">Я играю сам (эту партию приложение не играет)</label>
+    <div class="seg" id="prWho"></div>
+    <label class="row check"><input type="checkbox" id="prWait"> Ждать, пока я сыграю ноту (как в Synthesia)</label>
+    <label class="row check"><input type="checkbox" id="prCheck"> Проверять, верно ли я играю</label>
+    <label class="row check"><input type="checkbox" id="prMic"> Слушать микрофон (гитара, живое пианино)</label>
+    <p class="muted small" id="prInputs"></p>
+    <label class="lbl">Плавное ускорение в повторе фрагмента</label>
+    <label class="row check"><input type="checkbox" id="prRamp"> Каждый круг чуть быстрее</label>
+    <div class="row gap"><span class="muted small">с</span><select id="prFrom"></select><span class="muted small">до</span><select id="prTo"></select><span class="muted small">шаг</span><select id="prStep"></select></div>
+    <label class="row check"><input type="checkbox" id="prFing"> Номера пальцев на нотах (пианино)</label>
+    <label class="lbl">Запись своей игры</label>
+    <div class="row gap"><button id="prRec" class="chip">⏺ Записать с текущего места</button><button id="prLast" class="chip" style="display:none">Последняя запись</button></div>
+    <p class="muted small">Включите запись и играйте вместе с композицией. Потом можно послушать себя, себя вместе с оригиналом и увидеть, какие ноты не получились. С наушниками точнее.</p>
+    <div id="prScore" class="prscore"></div>
+  </div>
+</div>
+
+<div id="recSheet" class="sheet">
+  <div class="sheet-body tall">
+    <div class="sheet-head"><b>Ваша запись</b><button class="icon" data-close>✕</button></div>
+    <div id="recBody"></div>
+    <div class="row gap" style="margin-top:12px"><button id="recMine" class="chip">▶ Моя запись</button><button id="recBoth" class="chip">▶ Вместе с оригиналом</button><button id="recOrig" class="chip">▶ Оригинал</button><button id="recStop" class="chip">■</button></div>
+  </div>
+</div>
+
+<div id="songSheet" class="sheet">
+  <div class="sheet-body">
+    <div class="sheet-head"><b id="ssTitle">Композиция</b><button class="icon" data-close>✕</button></div>
+    <label class="lbl">Состояние</label>
+    <div class="seg" id="ssStatus"><button data-v="">—</button><button data-v="learning">Учу</button><button data-v="learned">Выучено ✓</button></div>
+    <label class="lbl">Папка</label>
+    <div class="row gap"><select id="ssFolder"></select><input type="text" id="ssNew" placeholder="Новая папка" style="flex:1;min-width:120px"><button id="ssAdd" class="chip">Создать</button></div>
+    <div class="row gap" style="margin-top:18px"><button id="ssDel" class="danger">Удалить композицию</button></div>
   </div>
 </div>
 

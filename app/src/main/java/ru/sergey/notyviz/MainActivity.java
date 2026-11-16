@@ -17,6 +17,13 @@ import android.webkit.WebViewClient;
 import android.webkit.WebChromeClient;
 import android.webkit.PermissionRequest;
 import android.Manifest;
+import android.media.midi.MidiDevice;
+import android.media.midi.MidiDeviceInfo;
+import android.media.midi.MidiManager;
+import android.media.midi.MidiOutputPort;
+import android.media.midi.MidiReceiver;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.pm.PackageManager;
 import android.widget.Toast;
 import android.content.ClipData;
@@ -92,6 +99,7 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 if (pageReady) return;
                 pageReady = true;
+                try { startMidi(); } catch (Exception ignored) { }
                 handleIntent(pendingIntent != null ? pendingIntent : getIntent());
                 pendingIntent = null;
             }
@@ -115,6 +123,62 @@ public class MainActivity extends Activity {
             }
         });
         web.loadUrl(START);
+    }
+
+    // ---------- MIDI-клавиатура по USB (или Bluetooth MIDI) ----------
+    private final java.util.Map<Integer, MidiDevice> midiOpen = new java.util.HashMap<>();
+    private final java.util.Map<Integer, String> midiNames = new java.util.HashMap<>();
+    private void startMidi() {
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_MIDI)) return;
+        final MidiManager mm = (MidiManager) getSystemService(MIDI_SERVICE);
+        if (mm == null) return;
+        for (MidiDeviceInfo info : mm.getDevices()) openMidi(mm, info);
+        mm.registerDeviceCallback(new MidiManager.DeviceCallback() {
+            @Override public void onDeviceAdded(MidiDeviceInfo info) { openMidi(mm, info); }
+            @Override public void onDeviceRemoved(MidiDeviceInfo info) {
+                MidiDevice d = midiOpen.remove(info.getId()); midiNames.remove(info.getId());
+                if (d != null) try { d.close(); } catch (Exception ignored) { }
+                sendMidiDevices();
+            }
+        }, new Handler(Looper.getMainLooper()));
+    }
+    private void openMidi(MidiManager mm, final MidiDeviceInfo info) {
+        if (info.getOutputPortCount() < 1 || midiOpen.containsKey(info.getId())) return;
+        mm.openDevice(info, device -> {
+            if (device == null) return;
+            MidiOutputPort port = device.openOutputPort(0);
+            if (port == null) { try { device.close(); } catch (Exception ignored) { } return; }
+            port.connect(new MidiReceiver() {
+                @Override public void onSend(byte[] msg, int offset, int count, long timestamp) {
+                    int i = offset, end = offset + count;
+                    while (i < end) {
+                        int st = msg[i] & 0xFF;
+                        if (st < 0x80) { i++; continue; }
+                        int type = st & 0xF0;
+                        int len = (type == 0xC0 || type == 0xD0) ? 2 : (st >= 0xF0 ? 1 : 3);
+                        if (i + len > end) break;
+                        if (type == 0x90 || type == 0x80 || type == 0xB0) {
+                            final int a = st, b = msg[i + 1] & 0x7F, c = msg[i + 2] & 0x7F;
+                            runOnUiThread(() -> web.evaluateJavascript("window.onMidiIn&&window.onMidiIn(" + a + "," + b + "," + c + ")", null));
+                        }
+                        i += len;
+                    }
+                }
+            });
+            midiOpen.put(info.getId(), device);
+            android.os.Bundle p = info.getProperties();
+            String name = p.getString(MidiDeviceInfo.PROPERTY_NAME);
+            if (name == null) name = p.getString(MidiDeviceInfo.PROPERTY_PRODUCT);
+            midiNames.put(info.getId(), name == null ? "MIDI" : name);
+            sendMidiDevices();
+        }, new Handler(Looper.getMainLooper()));
+    }
+    private void sendMidiDevices() {
+        StringBuilder sb = new StringBuilder("[");
+        for (String n : midiNames.values()) { if (sb.length() > 1) sb.append(','); sb.append('"').append(n.replace("\\", "").replace("\"", "")).append('"'); }
+        sb.append(']');
+        final String js = "window.onMidiDevices&&window.onMidiDevices(" + sb + ")";
+        runOnUiThread(() -> web.evaluateJavascript(js, null));
     }
 
     @Override

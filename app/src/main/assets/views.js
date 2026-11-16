@@ -111,10 +111,18 @@ export class PianoView {
       const x = n.x || {};
       // форшлаг — узкая нота; динамика — яркость
       const pad = x.grace ? k.w * 0.28 : (k.black ? 1 : 2);
-      g.globalAlpha = 0.5 + 0.5 * Math.min(1, (n.v || 96) / 112);
+      const other = ctx.mineOnly && n.h !== ctx.mineOnly && ctx.mineOnly !== 'both';
+      g.globalAlpha = (0.5 + 0.5 * Math.min(1, (n.v || 96) / 112)) * (other ? 0.35 : 1);
       rr(g, k.x + pad, top, k.w - pad * 2, Math.max(4, bot - top), 5);
       g.fillStyle = on ? c[2] : (k.black ? c[1] : c[0]); g.fill();
+      if (n.res) { g.globalAlpha = 1; g.strokeStyle = n.res === 'hit' ? '#3ccf8e' : '#ff5c5c'; g.lineWidth = 2.5; g.stroke(); }
       g.globalAlpha = 1;
+      if (ctx.fingers && n.fing && n.first && k.w > 9 && bot - top > 12) {
+        const fy = Math.min(fallH - 9, Math.max(top + 9, bot - (names && bot - top > 30 && k.w > 15 ? 26 : 10)));
+        g.fillStyle = '#fff'; g.beginPath(); g.arc(k.x + k.w / 2, fy, Math.min(8, k.w * 0.4), 0, 7); g.fill();
+        g.fillStyle = '#000'; g.font = `700 ${Math.min(11, k.w * 0.5)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText(n.fing, k.x + k.w / 2, fy + 0.5); g.textAlign = 'left';
+      }
       drawn.set(i, { x: k.x + k.w / 2, top, bot });
       if (names && k.w > 15 && bot - top > 16 && y1 < fallH + 1) {
         g.fillStyle = 'rgba(0,0,0,.65)'; g.font = `600 ${Math.min(12, k.w * 0.45)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'bottom';
@@ -152,6 +160,7 @@ export class PianoView {
     g.fillStyle = '#000'; g.fillRect(0, ky, W, KB);
     g.fillStyle = this.pedalDown ? '#3ccf8e' : '#3a3f4a'; g.fillRect(0, ky, W, 3);
     for (const m of pressed) if (!active.has(m)) active.set(m, ['#9cc5ff', '#6fa6e8', '#cfe3ff']);
+    if (ctx.want) for (const m of ctx.want) active.set(m, ['#ffd23f', '#d9a800', '#ffe58a']);
     for (const [m, k] of this.keys) if (!k.black) {
       const c = active.get(m);
       rr(g, k.x + 1, ky + 3, k.w - 2, KB - 5, 4);
@@ -366,6 +375,28 @@ export class GuitarView {
       g.fillStyle = x.pm ? '#fff' : '#000'; g.font = '700 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText(x.dead ? 'x' : Math.round(ff), bx, y + 0.5);
       const ids = techIds(q.x, 'g'); if (ids.length && !caption) caption = ids.map(id => TECH[id] ? TECH[id].name.split(' (')[0] : '').filter(Boolean).slice(0, 2).join(' · ') + (x.bend ? ' ' + bendText(x.bend.max).trim() : '');
+    }
+    // аккорд: название и схема (как держать на грифе)
+    if (ctx.chord) {
+      const c = ctx.chord, ns = c.frets.length, used = c.frets.filter(f => f != null && f > 0);
+      const minF = used.length ? Math.min(...used) : 1, base = Math.max(1, Math.max(...used, 1) <= 4 ? 1 : minF);
+      const bw = 92, bh = 30 + ns * 0 + 74, bx = W - bw - 8, by = roadTop + 8;
+      rr(g, bx, by, bw, bh, 10); g.fillStyle = 'rgba(23,26,33,.92)'; g.fill(); g.strokeStyle = '#2c313c'; g.lineWidth = 1; g.stroke();
+      g.fillStyle = '#ffd23f'; g.font = '700 16px system-ui'; g.textAlign = 'center'; g.textBaseline = 'top'; g.fillText(c.name, bx + bw / 2, by + 5);
+      const gx = bx + 14, gy = by + 34, gw = bw - 28, gh = 56, nf = 4, sx = gw / (ns - 1), fy = gh / nf;
+      g.strokeStyle = '#8b93a3'; g.lineWidth = 1;
+      for (let k = 0; k < ns; k++) { g.beginPath(); g.moveTo(gx + k * sx, gy); g.lineTo(gx + k * sx, gy + gh); g.stroke(); }
+      for (let k = 0; k <= nf; k++) { g.lineWidth = k === 0 && base === 1 ? 3 : 1; g.beginPath(); g.moveTo(gx, gy + k * fy); g.lineTo(gx + gw, gy + k * fy); g.stroke(); }
+      if (base > 1) { g.fillStyle = '#8b93a3'; g.font = '10px system-ui'; g.textAlign = 'right'; g.textBaseline = 'middle'; g.fillText(base, gx - 3, gy + fy / 2); }
+      // струны на схеме: слева толстая (последняя в строе), справа тонкая
+      for (let k = 0; k < ns; k++) {
+        const si = ns - 1 - k, f = c.frets[si], x = gx + k * sx;
+        g.textAlign = 'center'; g.textBaseline = 'bottom'; g.font = '10px system-ui'; g.fillStyle = '#8b93a3';
+        if (f == null) g.fillText('×', x, gy - 1);
+        else if (f === 0) { g.strokeStyle = '#e9ecf2'; g.lineWidth = 1.3; g.beginPath(); g.arc(x, gy - 6, 3, 0, 7); g.stroke(); }
+        else { const yy = gy + (f - base + 0.5) * fy; if (yy < gy + gh) { g.fillStyle = STRING_COLORS[si % STRING_COLORS.length]; g.beginPath(); g.arc(x, yy, 5, 0, 7); g.fill(); } }
+      }
+      g.textAlign = 'left';
     }
     if (caption) {
       g.font = '600 12px system-ui'; const tw = g.measureText(caption).width + 16;

@@ -78,8 +78,9 @@ zones = FZ
 LAY = [(1, 60, 50), (61, 92, 80), (93, 112, 105), (113, 127, 124)]
 for lk, hk, root in zones:
     for lv, hv, v in LAY:
-        for rr in range(2):
-            add(finish(amp(di(root, v, rr)), 3.5), 'notes', dict(lk=lk, hk=hk, lv=lv, hv=hv, root=root, rr=rr + 1, rrn=2))
+        NRR = int(os.environ.get('RR', '2'))
+        for rr in range(NRR):
+            add(finish(amp(di(root, v, rr)), float(os.environ.get('NOTE_LEN', '3.5'))), 'notes', dict(lk=lk, hk=hk, lv=lv, hv=hv, root=root, rr=rr + 1, rrn=NRR))
     for lv, hv, v in [(1, 100, 90), (101, 127, 120)]:
         add(finish(amp(pm(di(root, v))), 0.8), 'pm', dict(lk=lk, hk=hk, lv=lv, hv=hv, root=root, rel=0.06))
     print('note', root, flush=True)
@@ -101,7 +102,7 @@ for root in range(36, 66, 2):
                 n = max(len(p) for p in parts) + int(0.02 * SR); x = np.zeros(n)
                 for i, p in enumerate(parts): o = int(i * 0.006 * SR); x[o:o + len(p)] += p[:n - o]
                 if pmode: x = pm(x)
-                add(finish(amp(x), 0.8 if pmode else 3.5), kind + ('pm' if pmode else ''), dict(lk=root - 1, hk=root, lv=lv, hv=hv, root=root, rel=0.06 if pmode else 0.12))
+                add(finish(amp(x), 0.8 if pmode else float(os.environ.get('NOTE_LEN', '3.5'))), kind + ('pm' if pmode else ''), dict(lk=root - 1, hk=root, lv=lv, hv=hv, root=root, rel=0.06 if pmode else 0.12))
     print('chord', root, flush=True)
 # общая нормировка (громкости слоёв остаются как есть)
 g = 0.89 / max(np.abs(b).max() for b in bufs)

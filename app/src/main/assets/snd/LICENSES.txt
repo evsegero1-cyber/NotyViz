@@ -19,10 +19,13 @@ cab/    — импульсы гитарных кабинетов, Jester Dyne Pr
           v30_even, v30_brutal — Behringer BG412S, Celestion Vintage 30, Shure SM57 («Brutal Pack»);
           4x12_vintage, 2x12_blackpanel — пакет «Speaker Impulse Responses» (freesound.org/people/jesterdyne/packs/6385).
           (в приложении: укорочены до 60 мс, 44,1 кГц)
-egtra/  — «Электрогитара через усилитель»: записи, обработанные слепком настоящего усилителя (собрано tools/build_amp.py).
+egtra/, egtr_jcm900/, egtr_mesa/, egtr_5150/ — «Электрогитара через усилитель»: записи, обработанные слепком настоящего усилителя (собрано tools/build_amp.py).
           Гитара: FreePats «Electric Guitar FSBS Direct» (Fender, звукосниматель у подставки, запись в линию). CC0 1.0.
           https://github.com/freepats/electric-guitar-FSBS-direct
           Глухие ноты и звуки отпускания: Emilyguitar (Karoryfer), CC0 1.0.
-          Усилитель: нейросетевой слепок Marshall JCM2000 (канал Lead 2, Gain 6), автор Tim R,
+          Усилители (нейросетевые слепки): Marshall JCM2000 Lead 2 Gain 6 и Marshall JCM900 ch. B Gain 8 (Tim R),
+          Mesa/Boogie Mark IV (Roman A), Peavey 5150 Block Letter (Helga B);
           из сборника https://github.com/pelennor2170/NAM_models (лицензия GNU GPL v3); формат и движок —
           Neural Amp Modeler, S. Atkinson (MIT). Кабинет: Jester Dyne, BG412S V30 + SM57, CC0 1.0.
+bassamp/ — бас Growlybass (CC0), перезаписанный через слепок преампа Tech21 dUg DP3X (Jason Z,
+          сборник https://github.com/pelennor2170/NAM_models, GNU GPL v3). Собрано tools/reamp_pack.py.

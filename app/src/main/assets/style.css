@@ -239,3 +239,32 @@ input[type=number].sm{width:70px}
 .scard.playing{border-color:#3a4150}
 .sheet-head .sheetPlay{margin-left:auto;margin-right:8px}
 .trow .grow>div:first-child{display:flex;align-items:center;min-width:0}
+
+/* главный экран: поиск, папки */
+.gap2{gap:8px}.gap2>.big{flex:1}
+input[type=search]{background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--tx)}
+.libfilter{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}
+.libfilter button{flex:none;font-size:13px;padding:6px 11px;border-radius:16px}
+.libfilter button.on{background:rgba(76,154,255,.18);border-color:var(--acc);color:#9cc5ff}
+.card .st{font-size:11px;padding:1px 7px;border-radius:8px;margin-left:6px;vertical-align:middle}
+.card .st.learning{background:rgba(255,210,63,.18);color:#ffd23f}.card .st.learned{background:rgba(60,207,142,.18);color:#3ccf8e}
+/* метроном */
+.mtbody{flex:1;overflow-y:auto;padding:14px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
+.mtdots{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;min-height:36px}
+.mtdots span{width:28px;height:28px;border-radius:50%;background:var(--bg3);border:2px solid var(--line);transition:background .05s}
+.mtdots span.acc{border-color:#ff8a3d}
+.mtdots span.on{background:var(--acc);border-color:var(--acc)}.mtdots span.acc.on{background:#ff8a3d}
+.mtbpm{text-align:center}.mtbpm>span{font-size:64px;font-weight:700;line-height:1}.mtbpm small{display:block;color:var(--mut);font-size:13px}
+.mtrow{justify-content:center}.mtrow input{flex:1}
+.mtplay{flex:2;padding:14px;font-size:18px;border-radius:14px}.mttap{flex:1;padding:14px;font-size:18px;border-radius:14px}
+/* разучивание */
+.hud{position:absolute;left:8px;top:8px;z-index:4;display:none;flex-direction:column;gap:4px;pointer-events:none}
+.hud.on{display:flex}
+.hud div{background:rgba(23,26,33,.88);border:1px solid var(--line);border-radius:12px;padding:5px 10px;font-size:13px}
+.hud .wait{border-color:#ffd23f;color:#ffd23f;font-weight:600}
+.hud .score b{color:#3ccf8e}
+body.land .hud{top:28px}
+.prscore{margin-top:12px;font-size:14px}
+.recres{font-size:15px;line-height:1.6}.recres b{font-size:22px}
+.recmiss{margin-top:8px;font-size:13px;color:var(--mut)}
+#home>*{flex-shrink:0}
