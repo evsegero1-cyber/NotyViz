@@ -567,6 +567,7 @@ function fillTracks() {
     const a = document.createElement('div'); a.textContent = tr.name;
     const b = document.createElement('div'); b.className = 'muted small';
     b.textContent = [KIND_LABEL[tr.kind], tr.instrument && tr.instrument !== tr.name ? tr.instrument : '', tr.notes.length + ' нот'].filter(Boolean).join(' · ');
+    a.append(meterEl(i));
     info.append(a, b);
     if (tr.tuning && tr.kind !== 'drums') { const c = document.createElement('div'); c.className = 'small tuning'; c.textContent = 'Строй: ' + tuningLine(tr.tuning, tr.kind); info.appendChild(c); }
     const showBtn = document.createElement('button'); showBtn.className = 'chip';
@@ -1153,7 +1154,7 @@ function fillSound() {
     const dot = document.createElement('span'); dot.className = 'dot'; dot.style.cssText = `width:12px;height:12px;border-radius:3px;background:${TRACK_COLORS[i % TRACK_COLORS.length]}`;
     const nm = document.createElement('b'); nm.textContent = tr.name + ' · ' + KIND_LABEL[tr.kind];
     const play = document.createElement('button'); play.className = 'chip'; play.textContent = '▶ Образец'; play.onclick = () => sampleTrack(i);
-    hd.append(dot, nm, play); c.appendChild(hd);
+    hd.append(dot, nm, meterEl(i), play); c.appendChild(hd);
     c.appendChild(timbreSelect(tr, i, id => { setTimbre(i, id, true); setTimeout(fillSound, 50); }));
     const presets = FX_FOR_GROUP[tb.group] || FX_FOR_GROUP.gm;
     const curP = st.fx || tb.fx || (tb.group === 'piano' ? 'piano' : 'none');
@@ -1253,6 +1254,35 @@ $('diagRun').onclick = async () => {
     box.append(cap, tb);
   } catch (e) { box.textContent = 'Ошибка тестов: ' + (e.message || e); }
 };
+
+// ---------- Индикатор «сейчас звучит» в списках инструментов ----------
+function meterEl(i) {
+  const m = document.createElement('span'); m.className = 'lvl'; m.dataset.lv = i;
+  m.innerHTML = '<b><i></i></b><em>звучит</em>'; m.style.setProperty('--c', TRACK_COLORS[i % TRACK_COLORS.length]);
+  return m;
+}
+const lvHold = [];
+function meterLoop() {
+  requestAnimationFrame(meterLoop);
+  if (!P.song || !($('trackSheet').classList.contains('on') || $('soundSheet').classList.contains('on'))) return;
+  for (const el of document.querySelectorAll('.lvl')) {
+    const i = +el.dataset.lv;
+    const raw = engine.playing ? engine.audio.trackLevel(i) : 0;
+    const v = Math.min(1, Math.sqrt(raw) * 2.2);
+    lvHold[i] = Math.max(v, (lvHold[i] || 0) * 0.9);
+    el.querySelector('i').style.width = Math.round(lvHold[i] * 100) + '%';
+    const on = lvHold[i] > 0.06; el.classList.toggle('on', on);
+    const row = el.closest('.trow, .scard'); if (row) row.classList.toggle('playing', on);
+  }
+  for (const b of document.querySelectorAll('.sheetPlay')) b.textContent = engine.playing ? '❚❚ Пауза' : '▶ Играть';
+}
+requestAnimationFrame(meterLoop);
+for (const id of ['trackSheet', 'soundSheet']) {
+  const head = $(id).querySelector('.sheet-head');
+  const b = document.createElement('button'); b.className = 'chip sheetPlay'; b.textContent = '▶ Играть';
+  b.onclick = e => { e.stopPropagation(); if (!engine.sfReady) { toast('Звуки ещё загружаются…'); return; } if (engine.playing) engine.pause(); else engine.play(); };
+  head.insertBefore(b, head.lastElementChild);
+}
 
 // ---------- Тюнер ----------
 const tuner = initTuner({ show, engine, toast });

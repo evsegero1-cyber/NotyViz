@@ -105,11 +105,11 @@ function tubeCurve(bias, k) {
 // Голоса усилителя. stages: усиление (g0 + g1·drive), смещение и крутизна каскада, срезы между каскадами
 const AMP_VOICE = {
   clean: { inHp: 70, inLp: 9000, tight: null, stages: [{ g0: 1.1, g1: 1.5, bias: 0.12, k: 1.2, hp: 60, lp: 9000 }],
-    low: 1, midF: 600, mid: -1, high: 1, power: 1.1, presence: 1, ir: '2x12_blackpanel.wav', out: 21 },
+    low: 1, midF: 600, mid: -1, high: 1, power: 1.1, presence: 1, ir: '2x12_blackpanel.wav', out: 21, outNoCab: 0.8 },
   od: { inHp: 90, inLp: 7500, tight: [720, 6], stages: [{ g0: 3, g1: 6, bias: 0.2, k: 1.4, hp: 140, lp: 7000 }, { g0: 1.5, g1: 2.5, bias: -0.12, k: 1.3, hp: 80, lp: 6500 }],
-    low: 0, midF: 650, mid: -1, high: 0, power: 1.3, presence: 2, ir: '4x12_vintage.wav', out: 10 },
+    low: 0, midF: 650, mid: -1, high: 0, power: 1.3, presence: 2, ir: '4x12_vintage.wav', out: 10, outNoCab: 0.5 },
   dist: { inHp: 110, inLp: 6500, tight: [800, 5], stages: [{ g0: 4, g1: 8, bias: 0.18, k: 1.5, hp: 220, lp: 7500 }, { g0: 2.5, g1: 5, bias: -0.14, k: 1.5, hp: 90, lp: 6500 }, { g0: 1.2, g1: 1, bias: 0.06, k: 1.2, hp: 60, lp: 7000 }],
-    low: 1, midF: 550, mid: -3, high: 0, power: 1.4, presence: 2, ir: 'v30_even.wav', out: 2.5 },
+    low: 1, midF: 550, mid: -3, high: 0, power: 1.4, presence: 2, ir: 'v30_even.wav', out: 2.5, outNoCab: 0.35 },
 };
 
 function biq(ctx, type, f, g = 0, q = 0.707) { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.gain.value = g; b.Q.value = q; return b; }
@@ -159,17 +159,19 @@ class TrackChain {
       // оконечный каскад: мягкое ограничение, «присутствие» и резонанс динамика
       const pw = ctx.createWaveShaper(); pw.curve = tubeCurve(0.05, V.power); pw.oversample = lo ? 'none' : '2x'; add(pw);
       add(biq(ctx, 'peaking', 3600, V.presence, 0.9));
+      let conv = false;
       if (p.cab !== false) {
         const cv = ctx.createConvolver(); cv.normalize = true;
         const ir = p.ir || V.ir;
         const b = this.eng.cabBuf(ir);
-        if (b) { cv.buffer = b; add(cv); }
+        if (b) { cv.buffer = b; add(cv); conv = true; }
         else { // кабинет ещё не загружен: временно фильтры, потом подменим
           add(biq(ctx, 'peaking', 110, 3, 1.2), biq(ctx, 'peaking', 2400, 3, 1.4), biq(ctx, 'lowpass', 4800, 0, 1.0), biq(ctx, 'lowpass', 6000, 0, 0.7));
           this.eng.loadCab(ir).then(() => { if (this.params === p) this.set(params); }).catch(() => { });
         }
       }
-      const post = ctx.createGain(); post.gain.value = V.out * Math.pow(10, (p.gain || 0) / 20); add(post);
+      // свёртка с кабинетом (normalize) тише фильтров примерно в 25–30 раз: усиление для каждого случая своё
+      const post = ctx.createGain(); post.gain.value = (conv ? V.out : V.outNoCab) * Math.pow(10, (p.gain || 0) / 20); add(post);
     } else {
       add(biq(ctx, 'lowshelf', 120, p.low || 0), biq(ctx, 'peaking', 1000, p.mid || 0, 0.8), biq(ctx, 'highshelf', 5000, p.high || 0));
     }
@@ -484,6 +486,13 @@ export class AudioEngine {
   }
   setVolume(v) { this.vol = v; if (this.master) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02); }
   setReverb(on) { this.reverbOn = on; this.chains.forEach(c => { if (c.params) c.send.gain.value = on ? (c.params.reverb || 0) : 0; }); }
+  // уровень звука дорожки сейчас (0…1) — для индикатора «звучит»
+  trackLevel(i) {
+    const c = this.chains[i]; if (!c || !c.meter) return 0;
+    const b = this._lvBuf || (this._lvBuf = new Float32Array(c.meter.fftSize));
+    c.meter.getFloatTimeDomainData(b); let s = 0; for (let k = 0; k < b.length; k++) s += b[k] * b[k];
+    return Math.sqrt(s / b.length);
+  }
   setFx(i, params) { const c = this.chains[i]; if (c) c.set(params); }
   // ---------- часы ----------
   songSecAt(ct) {
@@ -735,13 +744,16 @@ export class AudioEngine {
       if (at > when) s.detune.setValueAtTime(bends[i][1] * 100, at);
     }
   }
-  previewNote(m, timbreId, drum) {
+  previewNote(m, timbreId, drum, dur) {
     const ctx = this.ensureCtx(); if (ctx.state !== 'running') ctx.resume();
     const tb = timbreFor(timbreId || (drum ? 'kit_live' : 'grand'));
-    this.bank.program(tb.pack, tb.prog, r => r.lk <= m && r.hk >= m).then(inst => {
+    const preset = tb.fx || (tb.group === 'piano' ? 'piano' : 'none'), pv = FX_PRESETS[preset] || {};
+    const cab = pv.amp && pv.amp !== 'bass' && pv.cab !== false ? this.loadCab(pv.ir || (AMP_VOICE[pv.amp] || AMP_VOICE.clean).ir).catch(() => { }) : Promise.resolve();
+    return Promise.all([this.bank.program(tb.pack, tb.prog, r => r.lk - 3 <= m && r.hk + 3 >= m), cab]).then(([inst]) => {
       if (!this.previewChain) { this.previewChain = new TrackChain(this); }
-      this.previewChain.set({ preset: tb.fx || (tb.group === 'piano' ? 'piano' : 'none') });
-      this.playRegionNote(inst, m, 100, ctx.currentTime + 0.02, ctx.currentTime + (drum ? 0.4 : 1.2), this.previewChain.input, null, null);
+      if (this.previewPreset !== preset) { this.previewChain.set({ preset }); this.previewPreset = preset; }
+      this.previewChain.out.gain.value = Math.pow(10, (tb.gain || 0) / 20);
+      this.playRegionNote(inst, m, 100, ctx.currentTime + 0.03, ctx.currentTime + (drum ? 0.4 : dur || 1.2), this.previewChain.input, null, null);
     }).catch(() => { });
   }
 }

@@ -228,3 +228,14 @@ input[type=number].sm{width:70px}
 .trow-vol{display:flex;align-items:center;gap:10px;padding-left:22px}
 .trow-vol input{flex:1}.trow-vol span{min-width:42px;text-align:right}
 .tuning{color:#9cc5ff}
+
+/* индикатор «звучит» */
+.lvl{display:inline-flex;align-items:center;gap:6px;margin-left:10px;vertical-align:middle;flex:none}
+.lvl b{display:block;position:relative;width:46px;height:6px;border-radius:3px;background:var(--bg3);overflow:hidden}
+.lvl b i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--c,#4c9aff);transition:width .05s linear}
+.lvl em{font-style:normal;font-size:11px;color:var(--c,#4c9aff);opacity:0;transition:opacity .15s}
+.lvl.on em{opacity:1}
+.trow.playing .dot,.scard.playing .dot{box-shadow:0 0 0 3px rgba(255,255,255,.25),0 0 10px 2px currentColor}
+.scard.playing{border-color:#3a4150}
+.sheet-head .sheetPlay{margin-left:auto;margin-right:8px}
+.trow .grow>div:first-child{display:flex;align-items:center;min-width:0}

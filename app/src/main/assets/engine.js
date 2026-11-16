@@ -108,8 +108,8 @@ export class Engine {
     this.song.tracks.forEach((tr, i) => this.audio.trackState[i] && Object.assign(this.audio.trackState[i], { mute: !!(st.mute && st.mute[i]), solo: st.solo === i, vol: (tr.volume != null ? tr.volume : 1) * (snd[i] && snd[i].vol != null ? snd[i].vol : 1) }));
     this.audio.applyMix();
   }
-  previewNote(midi, program = 0, drum = false, timbre) {
-    this.audio.previewNote(midi, timbre || (drum ? 'kit_live' : this.previewTimbre(program)), drum);
+  previewNote(midi, program = 0, drum = false, timbre, dur) {
+    return this.audio.previewNote(midi, timbre || (drum ? 'kit_live' : this.previewTimbre(program)), drum, dur);
   }
   previewTimbre(program) {
     const p = program || 0;

@@ -52,10 +52,22 @@ export function initTuner({ show, engine, toast }) {
     $('tuAuto').classList.toggle('on', manual < 0);
     $('tuAuto').textContent = manual < 0 ? 'Авто: струна определяется сама' : 'Выбрана струна ' + (tun().midi.length - manual) + ' — нажмите, чтобы вернуть авто';
   }
-  function playTone(i) {
+  // Звук струны. Пока микрофон включён, Android переводит звук в «режим разговора» (глухо, моно) —
+  // поэтому на время образца микрофон выключаем и включаем снова после него.
+  const TONE = { bass4: 'bass_finger', bass5: 'bass_finger', bass6: 'bass_finger', violin: 'gm:40', viola: 'gm:41', cello: 'gm:42',
+    ukulele: 'nylon', balalaika: 'nylon', domra: 'nylon', mandolin: 'nylon', banjo: 'gm:105' };
+  let toneT = 0;
+  async function playTone(i) {
     const m = tun().midi[i]; if (m == null) return;
-    const timbre = inst().kind === 'bass' ? 'bass_finger' : (S.inst === 'violin' || S.inst === 'viola' || S.inst === 'cello') ? 'gm:40' : 'egtr_clean';
-    try { engine.previewNote(m, 0, false, timbre); } catch (e) { }
+    const timbre = TONE[S.inst] || 'egtr_clean';
+    const wasOn = !!stream;
+    if (wasOn) close();
+    clearTimeout(toneT);
+    try { await engine.previewNote(m, 0, false, timbre, 2.2); } catch (e) { }
+    toneT = setTimeout(async () => { toneT = 0;
+      if ($('tuner').classList.contains('on') && !stream) { await start(); cancelAnimationFrame(raf); raf = requestAnimationFrame(loop); }
+    }, 2600);
+    if (wasOn) { cancelAnimationFrame(raf); raf = requestAnimationFrame(loop); }
   }
   $('tuAuto').onclick = () => { manual = -1; paintStrings(); };
   const A4S = [440, 441, 442, 443, 444, 445, 432, 435, 436, 438, 439];
@@ -64,7 +76,7 @@ export function initTuner({ show, engine, toast }) {
     $('tuA4').textContent = 'A = ' + S.a4 + ' Гц';
     if (toast) toast('Эталон: ля первой октавы = ' + S.a4 + ' Гц' + (S.a4 === 440 ? ' (стандарт)' : ''));
   };
-  $('tuBack').onclick = () => { close(); show(back); };
+  $('tuBack').onclick = () => { clearTimeout(toneT); toneT = 0; close(); show(back); };
 
   async function start() {
     err = '';
@@ -159,7 +171,7 @@ export function initTuner({ show, engine, toast }) {
       if (cur.si != null && !chromatic()) { g.font = '13px system-ui'; g.fillStyle = '#8b93a3'; g.fillText(`Струна ${tun().midi.length - cur.si} (${midiNameOct(tun().midi[cur.si]).replace('#', '♯')})`, cx, cy + 6 + 48); }
     } else {
       g.fillStyle = '#8b93a3'; g.font = '16px system-ui';
-      g.fillText(an ? 'Дёрните струну' : 'Включаю микрофон…', cx, cy - R * 0.38);
+      g.fillText(an ? 'Дёрните струну' : toneT ? 'Звучит образец струны…' : 'Включаю микрофон…', cx, cy - R * 0.38);
     }
   }
   function wrap(g, txt, x, y, w, lh) {
