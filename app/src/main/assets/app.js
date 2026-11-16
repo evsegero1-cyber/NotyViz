@@ -22,6 +22,7 @@ import { chordName, retuneNotes } from './chords.js';
 import { initMetronome } from './metronome.js';
 import { RoadView } from './road.js';
 import { INSTRUMENTS } from './tunings.js';
+import { detectSections, sectionAt } from './sections.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./lib/pdf.worker.min.mjs', import.meta.url).href;
 
@@ -230,6 +231,8 @@ async function openSong(id) {
   engine.prog = P.prog; engine.sound = P.sound; engine.channelState = { mute: P.mute, oct: P.oct };
   engine.load(song, P.time, song.source === 'gp' ? P.raw : null);
   prepare();
+  P.secEdit = set.secEdit || {};
+  computeSections();
   $('pTitle').textContent = song.title;
   updateSub();
   show('player');
@@ -245,7 +248,7 @@ async function openSong(id) {
 }
 function saveSet() {
   if (!P.song) return;
-  ls.set('nv-set-' + P.song.id, { oct: P.oct, split: P.split, handMode: P.handMode, mode: P.mode, show: P.show, mute: P.mute, gTrack: P.gTrack, dTrack: P.dTrack, prog: P.prog, sound: P.sound, retune: P.retune });
+  ls.set('nv-set-' + P.song.id, { oct: P.oct, split: P.split, handMode: P.handMode, mode: P.mode, show: P.show, mute: P.mute, gTrack: P.gTrack, dTrack: P.dTrack, prog: P.prog, sound: P.sound, retune: P.retune, secEdit: P.secEdit });
 }
 function firstNoteSec() {
   let m = 1e9; for (const i of (P.show.length ? P.show : P.song.tracks.map((t, k) => k))) { const n = P.song.tracks[i] && P.song.tracks[i].notes.find(n => !n.deleted); if (n) m = Math.min(m, P.time.toSec(n.t)); }
@@ -314,7 +317,7 @@ function prepare() {
   P.drumNotes = [];
   const dt = tracks[P.dTrack];
   if (dt && dt.kind === 'drums') {
-    dt.notes.forEach((n, idx) => { if (!n.deleted) P.drumNotes.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), m: n.m, idx }); });
+    dt.notes.forEach((n, idx) => { if (!n.deleted) P.drumNotes.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), m: n.m, v: n.v, x: n.x, idx }); });
     P.drumNotes.sort((a, b) => a.s - b.s);
     drumsView.setNotes(P.drumNotes);
   }
@@ -442,7 +445,7 @@ function frame() {
     if (!W) resize();
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
     P.hot = [];
-    const ctx = { t, tick, hot: P.hints ? P.hot : null, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: P.loop ? { a: P.time.toSec(P.loop.ta), b: P.time.toSec(P.loop.tb) } : null };
+    const ctx = { t, tick, hot: P.hints ? P.hot : null, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: P.loop ? { a: P.time.toSec(P.loop.ta), b: P.time.toSec(P.loop.tb) } : null, sections: P.sections };
     if (P.mode === 'keys') piano.draw(g, W, H, { ...ctx, notes: P.keysNotes, land: P.land, pressed: P.pressed, pedal: P.pedal, fingers: P.train && P.train.fing, want: train && train.waiting ? train.waiting.need : null, mineOnly: P.train && P.train.who !== 'none' && P.train.who !== 'fret' ? P.train.who : null });
     else if (P.mode === 'road') road.draw(g, W, H, { ...ctx, notes: P.fretNotes, land: P.land, chordFor: s0 => { const c = (P.fretChords || []).find(c => Math.abs(c.s - s0) < 0.05); return c ? c.name : null; } });
     else if (P.mode === 'drums') drumsView.draw(g, W, H, { ...ctx, notes: P.drumNotes, pressed: P.pressedPads, land: P.land });
@@ -463,7 +466,8 @@ function frame() {
     if (!engine.loading) $('posLbl').textContent = 'Такт ' + P.song.measures[mi].n;
     $('timeLbl').textContent = fmt(t);
     if (!seeking) $('seek').value = Math.round(t / Math.max(0.1, P.time.total) * 1000);
-    if (P.land) { $('lPos').textContent = 'Такт ' + P.song.measures[mi].n; $('landProg').firstChild.style.width = (t / Math.max(0.1, P.time.total) * 100) + '%'; }
+    updSecUi(mi, t);
+    if (P.land) { const sc = sectionAt(P.sections, mi); $('lPos').textContent = (sc ? sc.name + ' · ' : '') + 'Такт ' + P.song.measures[mi].n; $('landProg').firstChild.style.width = (t / Math.max(0.1, P.time.total) * 100) + '%'; }
   }
 }
 requestAnimationFrame(frame);
@@ -473,6 +477,71 @@ function tuningLabels(tr) {
   if (tr.tuningNames && tr.tuningNames.length === tr.tuning.length) return tr.tuningNames;
   const L = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   return tr.tuning.map((m, i) => { const s = L[m % 12]; return i === 0 ? s.toLowerCase() : s; });
+}
+
+
+// ---------- Части песни ----------
+function computeSections() {
+  let markers = null;
+  try {
+    const sc = engine.score;
+    if (sc && sc.masterBars && P.song.source === 'gp' && !P.song.custom) {
+      markers = [];
+      P.song.measures.forEach((m, i) => { const mb = sc.masterBars[m.n - 1]; if (mb && mb.section && (mb.section.text || mb.section.marker)) markers.push({ idx: i, text: mb.section.text || mb.section.marker }); });
+    }
+  } catch (e) { markers = null; }
+  let secs = [];
+  try { secs = detectSections(P.song, markers); } catch (e) { console.warn(e); }
+  for (const sc of secs) { const nm = P.secEdit && P.secEdit[sc.a]; if (nm) sc.name = nm; }
+  P.sections = secs;
+  renderSecBar();
+}
+function secDur(sc) { const ms = P.song.measures, t0 = P.time.mStarts[sc.a], last = ms[sc.b]; return P.time.toSec(last.tick + last.len) - t0; }
+function renderSecBar() {
+  const bar = $('secBar'), lp = $('landSecs'); bar.innerHTML = ''; lp.innerHTML = '';
+  const secs = P.sections || []; bar.style.display = secs.length > 1 ? '' : 'none';
+  const tot = Math.max(0.1, P.time.total);
+  for (const sc of secs) {
+    const d = secDur(sc), b = document.createElement('button');
+    b.className = 'sec'; b.style.flexGrow = Math.max(0.01, d); b.style.setProperty('--c', sc.col);
+    b.textContent = sc.name; b.title = sc.name;
+    let pt = null, long = false;
+    b.onpointerdown = () => { long = false; pt = setTimeout(() => { long = true; secMenu(sc); }, 500); };
+    b.onpointerup = b.onpointerleave = b.onpointercancel = () => clearTimeout(pt);
+    b.onclick = () => { if (long) return; gotoMeasure(sc.a); toast(sc.name + ' · такт ' + P.song.measures[sc.a].n); };
+    b.oncontextmenu = e => e.preventDefault();
+    sc.el = b; bar.appendChild(b);
+    const l = document.createElement('div'); l.className = 'lsec'; l.style.left = (P.time.mStarts[sc.a] / tot * 100) + '%'; l.style.width = (d / tot * 100) + '%'; l.style.background = sc.col; lp.appendChild(l);
+  }
+  P.secCur = null;
+}
+function updSecUi(mi, t) {
+  const sc = sectionAt(P.sections, mi);
+  if (sc !== P.secCur) { if (P.secCur && P.secCur.el) P.secCur.el.classList.remove('on'); if (sc && sc.el) { sc.el.classList.add('on'); sc.el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } P.secCur = sc; }
+  const tag = $('secTag');
+  if (!sc || (P.sections || []).length < 2) { tag.style.display = 'none'; return; }
+  const i = P.sections.indexOf(sc), nx = P.sections[i + 1];
+  const left = nx ? P.time.mStarts[nx.a] - t : 1e9;
+  const beat = 60 / (P.time.bpmAt(engine.nowTick()) || 120);
+  let html = `<i style="background:${sc.col}"></i>${sc.name}`;
+  if (nx && left < beat * 4.5 && left > 0) html += ` <span>→ <i style="background:${nx.col}"></i>${nx.name} через ${Math.max(1, Math.ceil(left / beat - 0.05))}</span>`;
+  if (tag._h !== html) { tag.innerHTML = html; tag._h = html; }
+  tag.style.display = 'block';
+}
+function secMenu(sc) {
+  const box = $('secBody'); box.innerHTML = '';
+  $('secTitle').textContent = sc.name + ` · такты ${P.song.measures[sc.a].n}–${P.song.measures[sc.b].n}`;
+  const add = (txt, fn) => { const b = document.createElement('button'); b.className = 'wide'; b.textContent = txt; b.onclick = () => { $('secSheet').classList.remove('on'); fn(); }; box.appendChild(b); };
+  add('▶ Играть с начала части', () => { gotoMeasure(sc.a); if (!engine.playing && engine.sfReady) engine.play(); });
+  add('⟲ Повторять эту часть', () => setLoop(P.song.measures[sc.a].n, P.song.measures[sc.b].n, sc.a));
+  add('🔁 Учить в риф-репитере', () => { if (train) train.riffSection(sc); });
+  const row = document.createElement('div'); row.className = 'row gap secren';
+  const inp = document.createElement('input'); inp.value = sc.name; inp.placeholder = 'Название части';
+  const ok = document.createElement('button'); ok.className = 'chip'; ok.textContent = '✎ Переименовать';
+  ok.onclick = () => { const nm = inp.value.trim(); if (!nm) return; P.secEdit[sc.a] = nm; saveSet(); computeSections(); $('secSheet').classList.remove('on'); };
+  row.append(inp, ok); box.appendChild(row);
+  if (Object.keys(P.secEdit || {}).length) add('↺ Вернуть названия по умолчанию', () => { P.secEdit = {}; saveSet(); computeSections(); });
+  $('secSheet').classList.add('on');
 }
 
 // ---------- Управление ----------
@@ -499,11 +568,11 @@ $('loopBtn').onclick = () => {
   const mi = P.time.measureAtSec(P.time.toSec(engine.nowTick()) + 0.01);
   setLoop(P.song.measures[mi].n, P.song.measures[Math.min(mi + 3, P.song.measures.length - 1)].n);
 };
-function setLoop(fromN, toN) {
+function setLoop(fromN, toN, aIdx) {
   const ms = P.song.measures;
-  const a = ms.findIndex(m => m.n === fromN), b = ms.findIndex((m, i) => i >= a && m.n === toN);
+  const a = aIdx != null && ms[aIdx] && ms[aIdx].n === fromN ? aIdx : ms.findIndex(m => m.n === fromN), b = ms.findIndex((m, i) => i >= a && m.n === toN);
   if (a < 0 || b < 0) { toast('Проверьте номера тактов'); return; }
-  P.loop = { ta: ms[a].tick, tb: ms[b].tick + ms[b].len, from: fromN, to: toN };
+  P.loop = { ta: ms[a].tick, tb: ms[b].tick + ms[b].len, from: fromN, to: toN, ai: a, bi: b };
   engine.setLoop(P.loop.ta, P.loop.tb);
   $('loopFrom').value = fromN; $('loopTo').value = toN;
   const cur = engine.nowTick(); if (cur < P.loop.ta || cur >= P.loop.tb) engine.seekTick(P.loop.ta);
@@ -717,11 +786,13 @@ function fillList() {
   const by = new Map();
   for (const n of tr.notes) { if (n.deleted || n.tie) continue; if (!by.has(n.bar)) by.set(n.bar, []); by.get(n.bar).push(n); }
   const cur = P.song.measures[P.time.measureAtSec(P.time.toSec(engine.nowTick()))].n;
+  const secAt = new Map(); for (const sc of P.sections || []) { const n0 = P.song.measures[sc.a].n; if (!secAt.has(n0)) secAt.set(n0, { name: sc.name, col: sc.col }); }
   let count = 0;
   for (const [mn, arr] of by) {
     if (++count > 600) break;
     const groups = [];
     for (const n of arr) { const gg = groups.find(x => x.t === n.t); if (gg) gg.ns.push(n); else groups.push({ t: n.t, ns: [n] }); }
+    for (const [n0, sc] of secAt) if (n0 <= mn && !sc.shown) { sc.shown = true; const h = document.createElement('div'); h.className = 'mhead'; h.style.borderColor = sc.col; h.textContent = sc.name; box.appendChild(h); }
     const d = document.createElement('div'); d.className = 'mrow' + (mn === cur ? ' cur' : '');
     const b = document.createElement('b'); b.textContent = mn; d.appendChild(b);
     const sp = document.createElement('span');
@@ -1388,7 +1459,7 @@ function openTunerFor(tr) {
 }
 $('tunerBtn').onclick = () => tuner.open(null, 'home');
 $('tunerBtn2').onclick = () => { $('sheet').classList.remove('on'); const gt = P.song && P.song.tracks[P.gTrack]; openTunerFor(gt && gt.tuning ? gt : null); };
-window.__nv = { engine, P, tuner, prepare: () => prepare(), get train() { return train; } };
+window.__nv = { engine, P, tuner, prepare: () => prepare(), openSong, computeSections: () => computeSections(), get train() { return train; } };
 
 // ---------- Результат распознавания нот из PDF ----------
 function showOmrReport() {

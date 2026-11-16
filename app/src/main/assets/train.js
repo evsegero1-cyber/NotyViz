@@ -268,12 +268,25 @@ export function initTrain(d) {
     $('rfModeInfo').textContent = RF.mode === 'good' ? 'Проверка игры включится сама: ускорение — только после круга, сыгранного на 90% и лучше (экранные клавиши, MIDI или микрофон).' : '';
     $('rfCount').checked = RF.count;
     const a = +$('rfA').value, b = +$('rfB').value;
+    rfSecs();
     $('rfInfo').textContent = a && b ? `Такты ${a}–${b}: ${b - a + 1} ${b - a + 1 === 1 ? 'такт' : b - a + 1 < 5 ? 'такта' : 'тактов'}` : '';
     $('rfGo').textContent = RF.on ? '■ Остановить риф-репитер' : '▶ Начать';
     $('rfStat').textContent = RF.on ? `Круг ${RF.rounds + 1}, скорость ${Math.round(P.speed * 100)}%` + (RF.best ? `, лучший результат ${Math.round(RF.best * 100)}%` : '') : '';
   }
   const clampM = v => Math.max(P.song.measures[0].n, Math.min(mMax(), v));
-  const setAB = (a, b) => { a = clampM(a); b = clampM(Math.max(a, b)); $('rfA').value = a; $('rfB').value = b; rfFill(); if (RF.on) setLoop(a, b); };
+  const setAB = (a, b, ai) => { a = clampM(a); b = clampM(Math.max(a, b)); RF.ai = ai; $('rfA').value = a; $('rfB').value = b; rfFill(); if (RF.on) setLoop(a, b, ai); };
+  function rfSecs() {
+    const box = $('rfSecs'); box.innerHTML = ''; const secs = P.sections || [];
+    $('rfSecL').style.display = box.style.display = secs.length > 1 ? '' : 'none';
+    const a = +$('rfA').value, b = +$('rfB').value;
+    for (const sc of secs) {
+      if (sc.kind === 'rest') continue;
+      const n0 = P.song.measures[sc.a].n, n1 = P.song.measures[sc.b].n;
+      const c = document.createElement('button'); c.className = 'chip' + (a === n0 && b === n1 ? ' on' : ''); c.style.setProperty('--c', sc.col);
+      c.textContent = sc.name; c.onclick = () => { setAB(n0, n1, sc.a); rfSecs(); };
+      box.appendChild(c);
+    }
+  }
   $('rfA-').onclick = () => setAB(+$('rfA').value - 1, +$('rfB').value); $('rfA+').onclick = () => setAB(+$('rfA').value + 1, +$('rfB').value);
   $('rfB-').onclick = () => setAB(+$('rfA').value, +$('rfB').value - 1); $('rfB+').onclick = () => setAB(+$('rfA').value, +$('rfB').value + 1);
   $('rfA').onchange = $('rfB').onchange = () => setAB(+$('rfA').value, +$('rfB').value);
@@ -294,7 +307,7 @@ export function initTrain(d) {
     const a = +$('rfA').value, b = +$('rfB').value; if (!a || !b) return;
     RF.on = true; RF.rounds = 0; RF.best = 0; RF.done = false;
     if (RF.mode === 'good' && !T.check) { T.check = true; saveT(); rebuild(); }
-    engine.pause(); setLoop(a, b); setSpeed(RF.s0); engine.seekTick(P.loop.ta);
+    engine.pause(); setLoop(a, b, RF.ai); setSpeed(RF.s0); engine.seekTick(P.loop.ta);
     applyCount();
     $('riffSheet').classList.remove('on');
     if (RF.count) { // отсчёт перед первым кругом
@@ -307,7 +320,7 @@ export function initTrain(d) {
   }
   function rfStop() { RF.on = false; engine.audio.setCountIn(0); hud(); rfFill(); toast('Риф-репитер выключен' + (RF.rounds ? `: ${RF.rounds} кругов` : '')); }
   $('rfGo').onclick = () => { if (RF.on) rfStop(); else rfStart(); };
-  const openRiff = () => { $('rfA').value = ''; rfFill(); $('riffSheet').classList.add('on'); };
+  const openRiff = () => { $('rfA').value = ''; RF.ai = P.loop ? P.loop.ai : null; rfFill(); $('riffSheet').classList.add('on'); };
   $('riffBtn').onclick = openRiff; if ($('lLoop')) $('lLoop').onclick = openRiff;
 
   const open = () => { fill(); $('pracSheet').classList.add('on'); };
@@ -316,6 +329,7 @@ export function initTrain(d) {
   return {
     rebuild, frame, input, onSeek, fill, isMine, handOf,
     riffOff() { if (RF.on) rfStop(); },
+    riffSection(sc) { if (RF.on) rfStop(); setAB(P.song.measures[sc.a].n, P.song.measures[sc.b].n, sc.a); rfFill(); $('riffSheet').classList.add('on'); },
     onSong() { RF.on = false; engine.audio.setCountIn(0); st.last = null; st.recBuf = null; $('prLast').style.display = 'none'; rebuild(); if (T.mic) micOn(); },
     onLeave() { if (st.rec) recStop(); micOff(); },
     get waiting() { return st.pending; }

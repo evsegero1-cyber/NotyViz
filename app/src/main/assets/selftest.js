@@ -4,6 +4,7 @@
 import { PPQ, makeTime } from './model.js';
 import { AudioEngine, GM_DRUMS } from './audio.js';
 import { drumNote, findRests, buildSong } from './parser.js';
+import { detectSections } from './sections.js';
 
 // Тестовая композиция: 4 инструмента, ноты на каждую долю, смена темпа 120 → 90 → 150
 export function testSong(opts = {}) {
@@ -201,10 +202,25 @@ export function pdfRhythmTests() {
   return [R(9, 'Ритм PDF Songsterr: паузы', restsOk && timeOk, `паузы: ${kinds}${restsOk ? '' : ' (ожидалось half:2 8:0.5 whole:4 16:0.375)'}; ноты после паузы на долях ${starts}${timeOk ? '' : ' (ожидалось 2.5 3 3.25 3.5 3.75)'}`)];
 }
 
+// Части песни: вступление A×4, B×8 (тихий куплет), C×8 (громкий припев с крэшем), B, C, D×4 (концовка)
+export function sectionTests() {
+  const M = PPQ * 4, plan = 'AAAABBBBBBBBCCCCCCCCBBBBBBBBCCCCCCCCDDDD'.split('');
+  const pat = { A: [40, 40, 43, 45], B: [45, 45, 48, 45], C: [50, 53, 55, 57], D: [40, 43, 40, 36] };
+  const g = [], d = [];
+  plan.forEach((k, i) => { pat[k].forEach((m, j) => { g.push({ t: i * M + j * PPQ, d: PPQ, m, v: 100 }); if (k === 'C') g.push({ t: i * M + j * PPQ + PPQ / 2, d: PPQ / 2, m: m + 7, v: 100 }); });
+    for (let j = 0; j < 4; j++) { d.push({ t: i * M + j * PPQ, d: 60, m: j % 2 ? 38 : 36, v: 100 }); if (k === 'C' && j === 0) d.push({ t: i * M, d: 60, m: 49, v: 110 }); } });
+  const song = { measures: plan.map((k, i) => ({ n: i + 1, tick: i * M, len: M, sig: [4, 4] })), tracks: [{ kind: 'eguitar', tuning: [64, 59, 55, 50, 45, 40], notes: g }, { kind: 'drums', notes: d }] };
+  const secs = detectSections(song);
+  const got = secs.map(s => `${s.kind}:${s.a + 1}-${s.b + 1}`).join(' ');
+  const want = 'intro:1-4 verse:5-12 chorus:13-20 verse:21-28 chorus:29-36 outro:37-40';
+  return [R(10, 'Разметка частей песни', got === want, `найдено: ${secs.map(s => `${s.name} ${s.a + 1}–${s.b + 1}`).join(', ')}${got === want ? '' : ' (ожидалось: ' + want + ')'}`)];
+}
+
 export async function runAll(progress) {
   const res = [];
   res.push(...await scheduleTests());
   try { res.push(...pdfRhythmTests()); } catch (e) { res.push(R(9, 'Ритм PDF Songsterr: паузы', false, String(e && e.message || e))); }
+  try { res.push(...sectionTests()); } catch (e) { res.push(R(10, 'Разметка частей песни', false, String(e && e.message || e))); }
   const d = await drumTests(); res.push(...d.out);
   try { res.push(...await audioTests(progress)); } catch (e) { res.push(R(8, 'Рендер звука', false, String(e && e.message || e))); }
   return { results: res.sort((a, b) => a.id - b.id), drums: d.table };

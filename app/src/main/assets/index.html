@@ -59,10 +59,12 @@
       <button id="lMode" aria-label="Другой вид">🎸</button>
       <button id="lSet" aria-label="Настройки">⚙</button>
     </div>
-    <div id="landProg" class="landprog"><div></div></div>
+    <div id="landProg" class="landprog"><div></div><div id="landSecs"></div></div>
+    <div id="secTag" class="sectag"></div>
     <div id="hud" class="hud"></div>
   </div>
   <div class="ctrl">
+    <div id="secBar" class="secbar"></div>
     <div class="row">
       <span id="posLbl" class="pos">Такт 1</span>
       <input type="range" id="seek" min="0" max="1000" step="1" value="0">
@@ -232,6 +234,13 @@
   </div>
 </div>
 
+<div id="secSheet" class="sheet">
+  <div class="sheet-body">
+    <div class="sheet-head"><b id="secTitle"></b><button class="icon" data-close>✕</button></div>
+    <div id="secBody" class="secbody"></div>
+  </div>
+</div>
+
 <div id="listSheet" class="sheet">
   <div class="sheet-body tall">
     <div class="sheet-head"><b>Ноты по тактам</b><button class="icon" data-close>✕</button></div>
@@ -298,6 +307,8 @@
   <div class="sheet-body tall">
     <div class="sheet-head"><b>Риф-репитер</b><button class="icon" data-close>✕</button></div>
     <p class="muted small">Сложное место повторяется по кругу и постепенно ускоряется — пока не сыграете его в полном темпе.</p>
+    <label class="lbl" id="rfSecL">Часть песни</label>
+    <div id="rfSecs" class="rfsecs"></div>
     <label class="lbl">Фрагмент (такты)</label>
     <div class="row gap riffrow"><button id="rfA-" class="chip">−</button><input type="number" id="rfA" inputmode="numeric"><button id="rfA+" class="chip">+</button><span>—</span><button id="rfB-" class="chip">−</button><input type="number" id="rfB" inputmode="numeric"><button id="rfB+" class="chip">+</button></div>
     <div class="row gap" style="margin-top:8px"><button id="rfHere" class="chip">С текущего такта</button><button data-len="1" class="chip rflen">1 такт</button><button data-len="2" class="chip rflen">2</button><button data-len="4" class="chip rflen">4</button><button data-len="8" class="chip rflen">8</button></div>
