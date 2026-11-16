@@ -32,7 +32,7 @@ const NAMES = ['до', 'до♯', 'ре', 'ми♭', 'ми', 'фа', 'фа♯', 
 const octName = m => ['субконтр', 'контр', 'большой', 'малой', '1-й', '2-й', '3-й', '4-й', '5-й'][Math.floor(m / 12) - 1] || '';
 const noteName = m => NAMES[((m % 12) + 12) % 12] + ' ' + octName(m);
 const fmt = s => { s = Math.max(0, Math.round(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
-function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => e.classList.remove('on'), 2800); }
+function toast(t, ms = 2800) { const e = $('toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => e.classList.remove('on'), ms); }
 function busy(on, t) { $('busy').classList.toggle('on', on); if (t) $('busyTxt').textContent = t; }
 
 // ---------- Звук ----------
@@ -197,6 +197,9 @@ async function openSong(id) {
   if (engine.playing) engine.pause();
   P.song = song; P.time = makeTime(song); P.raw = null;
   if (song.source !== 'midi') P.raw = await idb.get('files', id);
+  // объединённая композиция из PDF, собранная старым разбором: исправления разбора в неё не попадают
+  if (song.source === 'merge' && (song.pv || 1) < PARSER_VERSION && (song.files || []).some(f => /\.pdf$/i.test(f)))
+    setTimeout(() => toast('Эта композиция собрана старой версией разбора PDF: ритм и бенды в ней могут быть неточными. Удалите её и объедините файлы заново.', 9000), 600);
   // PDF Songsterr, разобранный старой версией: разбираем заново (если ноты не правили вручную)
   if (song.source === 'pdf' && !song.omr && !song.omrReport && song.tracks.length === 1 && (song.pv || 1) < PARSER_VERSION && P.raw) {
     const edited = song.tracks.some(t => t.notes.some(n => n.edited || n.deleted));
@@ -287,7 +290,7 @@ function prepare() {
       } else col = trCol;
       const first = !seen.has(e.src); seen.add(e.src);
       const h = P.handMode === 'right' ? 'R' : (P.handMode === 'auto' && (n.h || tr.hand)) ? (n.h || tr.hand) : (m < P.split ? 'L' : 'R');
-      out.push({ s: time.toSec(e.t), e: time.toSec(e.t + e.d), m, col, ti, v: e.v, x: n.x, first, src: e.src, tk: ti, h });
+      out.push({ s: time.toSec(e.t), e: time.toSec(e.t + e.d), m, col, ti, v: e.v, x: n.x, f: n.f, first, src: e.src, tk: ti, h });
     }
     if (tr.pedal) for (const [a, b] of tr.pedal) P.pedal.push([time.toSec(a), time.toSec(b)]);
   }

@@ -69,8 +69,15 @@ export class PianoView {
     for (const [m, k] of this.keys) if (!k.black && x >= k.x && x < k.x + k.w) return m;
     return null;
   }
+  // центр клавиши для дробной высоты (для бендов): между соседними клавишами — по прямой
+  pitchX(p) {
+    const a = Math.floor(p), b = a + 1, ka = this.keys.get(a), kb = this.keys.get(b);
+    if (!ka) return kb ? kb.x + kb.w / 2 : 0; if (!kb) return ka.x + ka.w / 2;
+    const ca = ka.x + ka.w / 2, cb = kb.x + kb.w / 2; return ca + (cb - ca) * (p - a);
+  }
   draw(g, W, H, ctx) {
     this.layout(W, H, !!ctx.land);
+    this.bendMarks = [];
     const { t, notes, speed, names } = ctx;
     const pressed = ctx.pressed || new Set();
     g.fillStyle = '#0f1115'; g.fillRect(0, 0, W, H);
@@ -116,8 +123,25 @@ export class PianoView {
       const pad = x.grace ? k.w * 0.28 : (k.black ? 1 : 2);
       const other = ctx.mineOnly && n.h !== ctx.mineOnly && ctx.mineOnly !== 'both';
       g.globalAlpha = (0.5 + 0.5 * Math.min(1, (n.v || 96) / 112)) * (other ? 0.35 : 1);
-      rr(g, k.x + pad, top, k.w - pad * 2, Math.max(4, bot - top), 5);
+      const bent = (x.bend || (x.sl && x.slTo != null && n.f != null)) && !x.grace;
+      if (bent) {
+        // бенд и слайд: нота «уезжает» к той высоте, до которой её подтягивают (по клавишам вправо)
+        const dur = Math.max(1e-3, n.e - n.s), wq = k.w - pad * 2, L = [], R = [], N = 28;
+        for (let j = 0; j <= N; j++) {
+          const tau = n.s + dur * j / N, yy = yOf(tau); if (yy > bot + 0.5 || yy < top - 0.5) continue;
+          const fr = j / N, semi = bendAt(x, fr) + (n.f != null ? slideAt(n, fr) - n.f : 0), cx = this.pitchX(n.m + semi) + Math.sin(tau * 35) * (x.vib ? wq * 0.12 : 0);
+          L.push([cx - wq / 2, yy]); R.push([cx + wq / 2, yy]);
+        }
+        if (L.length > 1) { g.beginPath(); L.forEach((p, j) => j ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); for (let j = R.length - 1; j >= 0; j--) g.lineTo(R[j][0], R[j][1]); g.closePath(); }
+        else rr(g, k.x + pad, top, wq, Math.max(4, bot - top), 5);
+      } else rr(g, k.x + pad, top, k.w - pad * 2, Math.max(4, bot - top), 5);
       g.fillStyle = on ? c[2] : (k.black ? c[1] : c[0]); g.fill();
+      if (x.vib && !bent && bot - top > 10) { g.strokeStyle = 'rgba(0,0,0,.45)'; g.lineWidth = 1.5; g.beginPath(); for (let yy = top; yy < bot; yy += 2) g.lineTo(k.x + k.w / 2 + Math.sin(yy / 3) * k.w * 0.22, yy); g.stroke(); }
+      if (x.bend && y1 < fallH - 2 && y1 > 14) drawBendArrow(g, k.x + k.w + 4, y1 - 3, 15, x.bend.max, '#ff8a3d', /release/i.test(x.bend.type || '') && !/bend/i.test((x.bend.type || '').replace('release', '')));
+      if (on && bent) { // на клавиатуре: где сейчас звучит подтянутая нота
+        const fr = (t - n.s) / Math.max(1e-3, n.e - n.s), semi = bendAt(x, fr) + (n.f != null ? slideAt(n, fr) - n.f : 0);
+        if (Math.abs(semi) > 0.05) this.bendMarks = (this.bendMarks || []).concat([{ x: this.pitchX(n.m + semi), semi, col: c[2] }]);
+      }
       if (n.res) { g.globalAlpha = 1; g.strokeStyle = n.res === 'hit' ? '#3ccf8e' : '#ff5c5c'; g.lineWidth = 2.5; g.stroke(); }
       g.globalAlpha = 1;
       if (ctx.fingers && n.fing && n.first && k.w > 9 && bot - top > 12) {
@@ -187,6 +211,10 @@ export class PianoView {
       rr(g, 4, ky - 20, tw, 17, 8); g.fillStyle = this.pedalDown ? '#3ccf8e' : 'rgba(23,26,33,.85)'; g.fill();
       g.fillStyle = this.pedalDown ? '#000' : '#8b93a3'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(lbl, 10, ky - 11.5);
       if (ctx.hot) ctx.hot.push({ x: 4, y: ky - 20, w: tw, h: 17, ids: ['pedal'] });
+    }
+    for (const bm of this.bendMarks || []) {
+      const ky = H - this.KB; g.fillStyle = bm.col; g.beginPath(); g.arc(bm.x, ky - 9, 7, 0, 7); g.fill();
+      g.fillStyle = '#ff8a3d'; g.font = '700 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'bottom'; g.fillText('↑' + bendText(bm.semi).trim(), bm.x, ky - 18); g.textAlign = 'left';
     }
     const cap = techCaption(notes, t, ctx.firstIdx, 'piano');
     if (cap) drawCaption(g, cap, W / 2, ctx.land ? 108 : 38, t);

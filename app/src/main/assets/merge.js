@@ -2,6 +2,7 @@
 // Основной файл задаёт темп и такты; остальные приводятся к нему по тактам или по реальному времени.
 import { PPQ, makeTime, assignChannels } from './model.js';
 import { barOf } from './import-midi.js';
+import { PARSER_VERSION } from './parser.js';
 
 const firstNote = song => {
   let t = Infinity;
@@ -166,7 +167,7 @@ export function mergeSongs(files, refIdx, title, pianoName) {
     measures.unshift(...pre); measures.forEach((m, i) => m.n = i + 1);
     total += shift;
   }
-  const song = { v: 2, title, source: 'merge', custom: true, tempos, measures, totalTicks: total, tracks, files: files.map(f => f.name) };
+  const song = { v: 2, pv: PARSER_VERSION, title, source: 'merge', custom: true, tempos, measures, totalTicks: total, tracks, files: files.map(f => f.name) };
   extendMeasures(song);
   for (const tr of tracks) { tr.notes.sort((a, b) => a.t - b.t || a.m - b.m); for (const n of tr.notes) n.bar = barOf(song.measures, n.t); }
   const ok = assignChannels(tracks);

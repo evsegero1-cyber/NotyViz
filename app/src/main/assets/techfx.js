@@ -83,7 +83,7 @@ export function techCaption(notes, t, firstIdx, kind) {
   for (let i = firstIdx(notes, t - 4); i < notes.length; i++) {
     const q = notes[i]; if (q.s > t + 1.3) break;
     if (q.e < t || !q.x) continue;
-    const ids = techIds(q.x, kind).filter(id => TECH[id] && !['stroke_up', 'stroke_down', 'dyn', 'acc', 'tup', 'hand_L', 'leg', 'ten', 'cresc', 'dim'].includes(id));
+    const ids = techIds(q.x, q.f != null || q.st != null ? 'g' : kind).filter(id => TECH[id] && !['stroke_up', 'stroke_down', 'dyn', 'acc', 'tup', 'hand_L', 'leg', 'ten', 'cresc', 'dim'].includes(id));
     if (!ids.length) continue;
     const on = q.s <= t;
     if (!best || (on && !best.on) || (on === best.on && q.s < best.q.s)) best = { q, ids, on };
