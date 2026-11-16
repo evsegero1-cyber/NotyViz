@@ -268,3 +268,5 @@ body.land .hud{top:28px}
 .recres{font-size:15px;line-height:1.6}.recres b{font-size:22px}
 .recmiss{margin-top:8px;font-size:13px;color:var(--mut)}
 #home>*{flex-shrink:0}
+
+.riffrow input{width:64px;text-align:center}

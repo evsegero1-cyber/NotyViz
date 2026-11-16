@@ -37,6 +37,7 @@
   <div class="modes" id="modes">
     <button data-mode="keys" class="on">Клавиши</button>
     <button data-mode="fret">Гриф</button>
+    <button data-mode="road">Дорога</button>
     <button data-mode="drums">Барабаны</button>
     <button data-mode="score">Ноты</button>
     <button data-mode="pdf">Оригинал</button>
@@ -75,6 +76,7 @@
       <button id="loopBtn" class="chip">Повтор</button>
       <button id="metroBtn" class="chip">Метроном</button>
       <button id="pracBtn" class="chip">🎯 Учить</button>
+      <button id="riffBtn" class="chip">🔁 Риф</button>
     </div>
   </div>
 </section>
@@ -289,6 +291,26 @@
     <div class="row gap"><button id="prRec" class="chip">⏺ Записать с текущего места</button><button id="prLast" class="chip" style="display:none">Последняя запись</button></div>
     <p class="muted small">Включите запись и играйте вместе с композицией. Потом можно послушать себя, себя вместе с оригиналом и увидеть, какие ноты не получились. С наушниками точнее.</p>
     <div id="prScore" class="prscore"></div>
+  </div>
+</div>
+
+<div id="riffSheet" class="sheet">
+  <div class="sheet-body tall">
+    <div class="sheet-head"><b>Риф-репитер</b><button class="icon" data-close>✕</button></div>
+    <p class="muted small">Сложное место повторяется по кругу и постепенно ускоряется — пока не сыграете его в полном темпе.</p>
+    <label class="lbl">Фрагмент (такты)</label>
+    <div class="row gap riffrow"><button id="rfA-" class="chip">−</button><input type="number" id="rfA" inputmode="numeric"><button id="rfA+" class="chip">+</button><span>—</span><button id="rfB-" class="chip">−</button><input type="number" id="rfB" inputmode="numeric"><button id="rfB+" class="chip">+</button></div>
+    <div class="row gap" style="margin-top:8px"><button id="rfHere" class="chip">С текущего такта</button><button data-len="1" class="chip rflen">1 такт</button><button data-len="2" class="chip rflen">2</button><button data-len="4" class="chip rflen">4</button><button data-len="8" class="chip rflen">8</button></div>
+    <div class="row gap" style="margin-top:8px"><button id="rfMarkA" class="chip">⟦ Отметить начало</button><button id="rfMarkB" class="chip">Отметить конец ⟧</button></div>
+    <p class="muted small" id="rfInfo"></p>
+    <label class="lbl">Скорость</label>
+    <div class="row gap"><span class="muted small">начать с</span><select id="rfS0"></select><span class="muted small">до</span><select id="rfS1"></select><span class="muted small">шаг</span><select id="rfStep"></select></div>
+    <label class="lbl">Когда ускорять</label>
+    <div class="seg" id="rfMode"><button data-v="each">Каждый круг</button><button data-v="good">Когда сыграно ≥ 90%</button><button data-v="off">Не ускорять</button></div>
+    <p class="muted small" id="rfModeInfo"></p>
+    <label class="row check"><input type="checkbox" id="rfCount"> Отсчёт метронома перед каждым кругом</label>
+    <button id="rfGo" class="primary wide" style="margin-top:14px">▶ Начать</button>
+    <div id="rfStat" class="prscore"></div>
   </div>
 </div>
 

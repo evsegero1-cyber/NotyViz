@@ -8,7 +8,7 @@ const NAMES = ['до', 'до♯', 'ре', 'ми♭', 'ми', 'фа', 'фа♯', 
 const nm = m => NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
 
 export function initTrain(d) {
-  const { P, engine, toast, curTimbre, prepare, setSpeed, updateUi, saveSet } = d;
+  const { P, engine, toast, curTimbre, prepare, setSpeed, updateUi, saveSet, setLoop } = d;
   const T = P.train = Object.assign({ who: 'none', wait: false, check: false, mic: false, ramp: false, from: 0.6, to: 1, step: 0.05, fing: false }, ls.get('nv-train', {}));
   const st = { inputs: [], pending: null, lastS: -1, lastT: 0, score: null, rec: null, recBuf: null, recSrc: null, midiDevs: [] };
   const saveT = () => ls.set('nv-train', T);
@@ -128,6 +128,7 @@ export function initTrain(d) {
     const h = $('hud'); h.innerHTML = '';
     const add = (cls, html) => { const x = document.createElement('div'); x.className = cls; x.innerHTML = html; h.appendChild(x); };
     if (st.rec) add('wait', '⏺ Идёт запись…');
+    if (RF.on && P.loop) add('', `🔁 Риф ${P.loop.from}–${P.loop.to} · круг ${RF.rounds + 1} · ${Math.round(P.speed * 100)}%` + (RF.best ? ` · лучший ${Math.round(RF.best * 100)}%` : ''));
     if (st.pending) add('wait', 'Сыграйте: ' + [...st.pending.need].sort((a, b) => a - b).map(nm).join(' + '));
     if (T.check && st.score && st.score.total) add('score', `🎯 <b>${st.score.hit}</b> из ${st.score.total} · ${Math.round(st.score.hit / st.score.total * 100)}%`);
     if (T.who !== 'none' && !st.pending && !st.rec) add('', T.who === 'fret' ? 'Вы играете партию на грифе' : T.who === 'both' ? 'Вы играете обе руки' : T.who === 'R' ? 'Вы играете правую руку' : 'Вы играете левую руку');
@@ -137,9 +138,16 @@ export function initTrain(d) {
   function onSeek() { st.pending = null; st.lastS = P.time.toSec(engine.nowTick()) - 0.01; st.checkFrom = st.lastS; st.inputs = []; for (const q of TG) if (q.ref) q.ref.res = null; hud(); }
   engine.audio.onLoopWrap = () => {
     let msg = '';
-    if (T.check && st.score && st.score.total) msg = `Проход: ${Math.round(st.score.hit / st.score.total * 100)}% верно`;
+    const pct = st.score && st.score.total ? st.score.hit / st.score.total : null;
+    if (T.check && pct != null) msg = `Проход: ${Math.round(pct * 100)}% верно`;
     let ns = null;
-    if (T.ramp && P.loop) {
+    if (RF.on && P.loop) {
+      RF.rounds++; if (pct != null) RF.best = Math.max(RF.best || 0, pct);
+      const up = RF.mode === 'each' || (RF.mode === 'good' && pct != null && pct >= 0.9);
+      if (up) { const sp = Math.min(RF.s1, Math.round((P.speed + RF.step) * 100) / 100); if (sp !== P.speed) { ns = sp; P.speed = sp; engine.speed = sp; msg += (msg ? ' · ' : '') + 'Скорость ' + Math.round(sp * 100) + '%'; } else if (P.speed >= RF.s1 && !RF.done) { RF.done = true; msg += (msg ? ' · ' : '') + 'Целевой темп достигнут!'; } }
+      else if (RF.mode === 'good' && pct != null) msg += ' · нужно 90%, чтобы ускорить';
+      setTimeout(() => { updateUi(); hud(); }, 0);
+    } else if (T.ramp && P.loop) {
       const sp = Math.min(T.to, Math.round((P.speed + T.step) * 100) / 100);
       if (sp !== P.speed) { ns = sp; P.speed = sp; engine.speed = sp; setTimeout(() => { updateUi(); }, 0); msg += (msg ? ' · ' : '') + 'Скорость ' + Math.round(sp * 100) + '%'; }
     }
@@ -245,12 +253,70 @@ export function initTrain(d) {
   $('prTo').onchange = e => { T.to = +e.target.value; saveT(); };
   $('prStep').onchange = e => { T.step = +e.target.value; saveT(); };
   $('prFing').onchange = e => { T.fing = e.target.checked; saveT(); prepare(); rebuild(); };
+  // ---------- риф-репитер ----------
+  const RF = Object.assign({ on: false, s0: 0.6, s1: 1, step: 0.05, mode: 'each', count: false, rounds: 0 }, ls.get('nv-riff', {}), { on: false, rounds: 0 });
+  const saveRF = () => ls.set('nv-riff', { s0: RF.s0, s1: RF.s1, step: RF.step, mode: RF.mode, count: RF.count });
+  const curMeasure = () => P.song.measures[P.time.measureAtSec(engine.audio.nowSec() + 0.01)].n;
+  const mMax = () => P.song.measures[P.song.measures.length - 1].n;
+  function rfFill() {
+    if (!$('rfA').value) { const a = P.loop ? P.loop.from : curMeasure(); $('rfA').value = a; $('rfB').value = P.loop ? P.loop.to : Math.min(mMax(), a + 3); }
+    const sel = (id, vals, cur, f) => { const s = $(id); s.innerHTML = ''; for (const v of vals) { const o = document.createElement('option'); o.value = v; o.textContent = f(v); s.appendChild(o); } s.value = cur; };
+    sel('rfS0', [0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1], RF.s0, v => Math.round(v * 100) + '%');
+    sel('rfS1', [0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25], RF.s1, v => Math.round(v * 100) + '%');
+    sel('rfStep', [0.02, 0.05, 0.1], RF.step, v => '+' + Math.round(v * 100) + '%');
+    for (const b of $('rfMode').children) b.classList.toggle('on', b.dataset.v === RF.mode);
+    $('rfModeInfo').textContent = RF.mode === 'good' ? 'Проверка игры включится сама: ускорение — только после круга, сыгранного на 90% и лучше (экранные клавиши, MIDI или микрофон).' : '';
+    $('rfCount').checked = RF.count;
+    const a = +$('rfA').value, b = +$('rfB').value;
+    $('rfInfo').textContent = a && b ? `Такты ${a}–${b}: ${b - a + 1} ${b - a + 1 === 1 ? 'такт' : b - a + 1 < 5 ? 'такта' : 'тактов'}` : '';
+    $('rfGo').textContent = RF.on ? '■ Остановить риф-репитер' : '▶ Начать';
+    $('rfStat').textContent = RF.on ? `Круг ${RF.rounds + 1}, скорость ${Math.round(P.speed * 100)}%` + (RF.best ? `, лучший результат ${Math.round(RF.best * 100)}%` : '') : '';
+  }
+  const clampM = v => Math.max(P.song.measures[0].n, Math.min(mMax(), v));
+  const setAB = (a, b) => { a = clampM(a); b = clampM(Math.max(a, b)); $('rfA').value = a; $('rfB').value = b; rfFill(); if (RF.on) setLoop(a, b); };
+  $('rfA-').onclick = () => setAB(+$('rfA').value - 1, +$('rfB').value); $('rfA+').onclick = () => setAB(+$('rfA').value + 1, +$('rfB').value);
+  $('rfB-').onclick = () => setAB(+$('rfA').value, +$('rfB').value - 1); $('rfB+').onclick = () => setAB(+$('rfA').value, +$('rfB').value + 1);
+  $('rfA').onchange = $('rfB').onchange = () => setAB(+$('rfA').value, +$('rfB').value);
+  $('rfHere').onclick = () => { const a = curMeasure(); setAB(a, a + Math.max(0, +$('rfB').value - +$('rfA').value)); };
+  for (const b of document.querySelectorAll('.rflen')) b.onclick = () => { const a = +$('rfA').value || curMeasure(); setAB(a, a + +b.dataset.len - 1); };
+  $('rfMarkA').onclick = () => { const a = curMeasure(); setAB(a, Math.max(a, +$('rfB').value)); toast('Начало: такт ' + a); };
+  $('rfMarkB').onclick = () => { const b = curMeasure(); setAB(Math.min(+$('rfA').value, b), b); toast('Конец: такт ' + b); };
+  $('rfS0').onchange = e => { RF.s0 = +e.target.value; saveRF(); };
+  $('rfS1').onchange = e => { RF.s1 = +e.target.value; saveRF(); };
+  $('rfStep').onchange = e => { RF.step = +e.target.value; saveRF(); };
+  for (const b of $('rfMode').children) b.onclick = () => { RF.mode = b.dataset.v; saveRF(); rfFill(); };
+  $('rfCount').onchange = e => { RF.count = e.target.checked; saveRF(); applyCount(); };
+  function applyCount() {
+    if (RF.on && RF.count) { const m = P.song.measures[P.time.measureAtSec(P.time.toSec(P.loop.ta))]; const beats = m.sig[0], spb = 60 / (P.song.tempos[0].bpm || 120) * 4 / m.sig[1]; engine.audio.setCountIn(beats, P.time.toSec(P.loop.ta + m.len / beats) - P.time.toSec(P.loop.ta) || spb); }
+    else engine.audio.setCountIn(0);
+  }
+  function rfStart() {
+    const a = +$('rfA').value, b = +$('rfB').value; if (!a || !b) return;
+    RF.on = true; RF.rounds = 0; RF.best = 0; RF.done = false;
+    if (RF.mode === 'good' && !T.check) { T.check = true; saveT(); rebuild(); }
+    engine.pause(); setLoop(a, b); setSpeed(RF.s0); engine.seekTick(P.loop.ta);
+    applyCount();
+    $('riffSheet').classList.remove('on');
+    if (RF.count) { // отсчёт перед первым кругом
+      const ctx = engine.audio.ensureCtx(), cnt = engine.audio.countIn || { beats: 4, beat: 0.5 }, bc = cnt.beat / P.speed;
+      engine.audio.setMetronome(engine.audio.metro); // загрузить щелчки
+      const go = () => { const t0 = ctx.currentTime + 0.05; for (let k = 0; k < cnt.beats; k++) engine.audio.click(t0 + k * bc, k === 0); setTimeout(() => engine.play(), cnt.beats * bc * 1000 - 30); };
+      if (engine.audio.metroInst) go(); else { engine.audio.loadMetro().then(go); }
+    } else engine.play();
+    hud();
+  }
+  function rfStop() { RF.on = false; engine.audio.setCountIn(0); hud(); rfFill(); toast('Риф-репитер выключен' + (RF.rounds ? `: ${RF.rounds} кругов` : '')); }
+  $('rfGo').onclick = () => { if (RF.on) rfStop(); else rfStart(); };
+  const openRiff = () => { $('rfA').value = ''; rfFill(); $('riffSheet').classList.add('on'); };
+  $('riffBtn').onclick = openRiff; if ($('lLoop')) $('lLoop').onclick = openRiff;
+
   const open = () => { fill(); $('pracSheet').classList.add('on'); };
   $('pracBtn').onclick = open; $('lPrac').onclick = open;
 
   return {
     rebuild, frame, input, onSeek, fill, isMine, handOf,
-    onSong() { st.last = null; st.recBuf = null; $('prLast').style.display = 'none'; rebuild(); if (T.mic) micOn(); },
+    riffOff() { if (RF.on) rfStop(); },
+    onSong() { RF.on = false; engine.audio.setCountIn(0); st.last = null; st.recBuf = null; $('prLast').style.display = 'none'; rebuild(); if (T.mic) micOn(); },
     onLeave() { if (st.rec) recStop(); micOff(); },
     get waiting() { return st.pending; }
   };

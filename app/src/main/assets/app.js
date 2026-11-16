@@ -20,6 +20,7 @@ import { initTrain } from './train.js';
 import { assignFingering } from './practice.js';
 import { chordName, retuneNotes } from './chords.js';
 import { initMetronome } from './metronome.js';
+import { RoadView } from './road.js';
 import { INSTRUMENTS } from './tunings.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./lib/pdf.worker.min.mjs', import.meta.url).href;
@@ -186,7 +187,7 @@ const P = {
 };
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5];
 let train = null;
-const piano = new PianoView(), guitar = new GuitarView(), drumsView = new DrumView();
+const piano = new PianoView(), guitar = new GuitarView(), drumsView = new DrumView(), road = new RoadView();
 const pdfView = new PdfView($('pdfWrap'), pdfjsLib, (i, ti) => openEdit(i, ti));
 
 async function openSong(id) {
@@ -337,6 +338,7 @@ function prepare() {
     for (let k = P.fretNotes.length - 1; k >= 0; k--) { const q = P.fretNotes[k]; if (nextOn.has(q.st)) q.next = nextOn.get(q.st); nextOn.set(q.st, k); }
     P.gBends = perform(gt, PPQ).bends;
     guitar.setTrack(newTun ? Object.assign({}, gt, { tuning: newTun }) : gt, P.fretNotes);
+    road.setTrack(newTun ? Object.assign({}, gt, { tuning: newTun }) : gt, P.fretNotes, tuningLabels(gt));
     // аккорды: группы одновременных нот → название и схема
     P.fretChords = [];
     let grp = null;
@@ -360,7 +362,7 @@ function firstIdx(arr, s) { let lo = 0, hi = arr.length; while (lo < hi) { const
 function updateSub() {
   const tracks = P.song.tracks, gt = tracks[P.gTrack];
   let txt = tracks.length === 1 ? [tracks[0].name, KIND_LABEL[tracks[0].kind]].filter(Boolean).join(' · ') : `${tracks.length} дорожек: ` + [...new Set(tracks.map(t => KIND_LABEL[t.kind]))].join(', ');
-  if (P.mode === 'fret' && gt && gt.tuning) txt = `Строй ${tuningLine(P.fretTuning || gt.tuning, gt.kind)}${P.retune && P.retune[P.gTrack] ? ' (перестроено)' : ''} · ${gt.name}`;
+  if ((P.mode === 'fret' || P.mode === 'road') && gt && gt.tuning) txt = `Строй ${tuningLine(P.fretTuning || gt.tuning, gt.kind)}${P.retune && P.retune[P.gTrack] ? ' (перестроено)' : ''} · ${gt.name}`;
   else if (tracks.length === 1 && gt && gt.tuning) txt += ' · ' + describeTuning(gt.tuning, gt.kind).name;
   $('pSub').textContent = txt;
 }
@@ -368,7 +370,7 @@ function updateSub() {
 // ---------- Режимы ----------
 function setMode(mode, silent) {
   const s = P.song;
-  if (mode === 'fret' && !(s.tracks[P.gTrack] && s.tracks[P.gTrack].tuning && P.fretNotes.length)) {
+  if ((mode === 'fret' || mode === 'road') && !(s.tracks[P.gTrack] && s.tracks[P.gTrack].tuning && P.fretNotes.length)) {
     if (!silent) toast('Нет дорожки со струнами (гитара или бас)'); mode = 'keys';
   }
   if (mode === 'drums' && !P.drumNotes.length) { if (!silent) toast('В композиции нет ударных'); mode = 'keys'; }
@@ -377,16 +379,16 @@ function setMode(mode, silent) {
   P.mode = mode; saveSet();
   for (const b of $('modes').children) {
     b.classList.toggle('on', b.dataset.mode === mode);
-    const off = (b.dataset.mode === 'drums' && !P.drumNotes.length) || (b.dataset.mode === 'keys' && !P.keysNotes.length) || (b.dataset.mode === 'pdf' && s.source !== 'pdf') || (b.dataset.mode === 'fret' && !P.fretNotes.length) || (b.dataset.mode === 'score' && (s.source !== 'gp' || s.custom));
+    const off = (b.dataset.mode === 'drums' && !P.drumNotes.length) || (b.dataset.mode === 'keys' && !P.keysNotes.length) || (b.dataset.mode === 'pdf' && s.source !== 'pdf') || ((b.dataset.mode === 'fret' || b.dataset.mode === 'road') && !P.fretNotes.length) || (b.dataset.mode === 'score' && (s.source !== 'gp' || s.custom));
     b.classList.toggle('off', off);
   }
-  const canvasMode = mode === 'keys' || mode === 'fret' || mode === 'drums';
+  const canvasMode = mode === 'keys' || mode === 'fret' || mode === 'drums' || mode === 'road';
   $('landBtn').style.display = canvasMode ? '' : 'none';
   if (!canvasMode && P.land) exitLand(true);
   updateSub(); updLandMode();
   const split = mode === 'pdf' && !!s.omr;
   $('player').classList.toggle('split', split);
-  $('cv').style.display = (mode === 'keys' || mode === 'fret' || mode === 'drums' || split) ? 'block' : 'none';
+  $('cv').style.display = (canvasMode || split) ? 'block' : 'none';
   for (const b of $('modes').children) if (b.dataset.mode === 'drums') b.style.display = P.drumNotes.length ? '' : 'none';
   $('scoreWrap').classList.toggle('on', mode === 'score');
   $('pdfWrap').classList.toggle('on', mode === 'pdf');
@@ -436,12 +438,13 @@ function frame() {
   const tick = engine.nowTick();
   const t = P.time.toSec(tick);
   const mi = P.time.measureAtSec(t);
-  if (P.mode === 'keys' || P.mode === 'fret' || P.mode === 'drums') {
+  if (P.mode === 'keys' || P.mode === 'fret' || P.mode === 'drums' || P.mode === 'road') {
     if (!W) resize();
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
     P.hot = [];
     const ctx = { t, tick, hot: P.hints ? P.hot : null, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: P.loop ? { a: P.time.toSec(P.loop.ta), b: P.time.toSec(P.loop.tb) } : null };
     if (P.mode === 'keys') piano.draw(g, W, H, { ...ctx, notes: P.keysNotes, land: P.land, pressed: P.pressed, pedal: P.pedal, fingers: P.train && P.train.fing, want: train && train.waiting ? train.waiting.need : null, mineOnly: P.train && P.train.who !== 'none' && P.train.who !== 'fret' ? P.train.who : null });
+    else if (P.mode === 'road') road.draw(g, W, H, { ...ctx, notes: P.fretNotes, land: P.land, chordFor: s0 => { const c = (P.fretChords || []).find(c => Math.abs(c.s - s0) < 0.05); return c ? c.name : null; } });
     else if (P.mode === 'drums') drumsView.draw(g, W, H, { ...ctx, notes: P.drumNotes, pressed: P.pressedPads, land: P.land });
     else { const tr = P.song.tracks[P.gTrack]; guitar.draw(g, W, H, { ...ctx, notes: P.fretNotes, tuningNames: tuningLabels(tr), tuningTitle: tr && tr.tuning ? describeTuning(P.fretTuning || tr.tuning, tr.kind).name + (P.retune && P.retune[P.gTrack] ? ' (перестроено)' : '') : '', bends: P.gBends, land: P.land, chord: currentChord(t), want: train && train.waiting ? train.waiting.need : null }); }
   } else if (P.mode === 'score') {
@@ -492,7 +495,7 @@ $('speedBtn').onclick = () => setSpeed(SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SP
 function setSpeed(s) { P.speed = s; engine.setSpeed(s); updateUi(); fillSeg(); }
 $('metroBtn').onclick = () => { P.metro = !P.metro; engine.setMetronome(P.metro); updateUi(); };
 $('loopBtn').onclick = () => {
-  if (P.loop) { P.loop = null; engine.setLoop(null); updateUi(); toast('Повтор выключен'); return; }
+  if (P.loop) { P.loop = null; engine.setLoop(null); if (train) train.riffOff(); updateUi(); toast('Повтор выключен'); return; }
   const mi = P.time.measureAtSec(P.time.toSec(engine.nowTick()) + 0.01);
   setLoop(P.song.measures[mi].n, P.song.measures[Math.min(mi + 3, P.song.measures.length - 1)].n);
 };
@@ -542,14 +545,14 @@ const release = e => { const m = touchKey.get(e.pointerId); if (m == null) retur
 cv.addEventListener('pointerup', release); cv.addEventListener('pointercancel', release);
 
 // ---------- Альбомный полноэкранный режим ----------
-const CANVAS_MODES = ['keys', 'fret', 'drums'];
-function availModes() { return CANVAS_MODES.filter(m => m === 'keys' ? P.keysNotes.length : m === 'fret' ? P.fretNotes.length : P.drumNotes.length); }
+const CANVAS_MODES = ['keys', 'fret', 'road', 'drums'];
+function availModes() { return CANVAS_MODES.filter(m => m === 'keys' ? P.keysNotes.length : (m === 'fret' || m === 'road') ? P.fretNotes.length : P.drumNotes.length); }
 function updLandMode() {
   const b = $('lMode'); if (!b) return;
   const av = availModes(); b.style.display = av.length > 1 ? '' : 'none';
   const nx = av[(av.indexOf(P.mode) + 1) % av.length];
-  b.textContent = nx === 'keys' ? '🎹' : nx === 'fret' ? '🎸' : '🥁';
-  b.setAttribute('aria-label', nx === 'keys' ? 'Клавиши' : nx === 'fret' ? 'Гриф' : 'Барабаны');
+  b.textContent = nx === 'keys' ? '🎹' : nx === 'fret' ? '🎸' : nx === 'road' ? '🛣' : '🥁';
+  b.setAttribute('aria-label', nx === 'keys' ? 'Клавиши' : nx === 'fret' ? 'Гриф' : nx === 'road' ? 'Дорога' : 'Барабаны');
 }
 function enterLand(rotate) {
   if (!CANVAS_MODES.includes(P.mode)) setMode(availModes()[0] || 'keys');
@@ -573,7 +576,7 @@ $('lPlay').onclick = () => $('playBtn').onclick();
 $('lPrev').onclick = () => $('prevBtn').onclick();
 $('lNext').onclick = () => $('nextBtn').onclick();
 $('lSpeed').onclick = () => $('speedBtn').onclick();
-$('lLoop').onclick = () => $('loopBtn').onclick();
+
 $('lSet').onclick = () => $('setBtn').onclick();
 $('lMode').onclick = () => { const av = availModes(); const nx = av[(av.indexOf(P.mode) + 1) % av.length]; if (nx && nx !== P.mode) { setMode(nx); setTimeout(resize, 30); } };
 $('landProg').addEventListener('pointerdown', e => {
@@ -644,7 +647,7 @@ function fillTracks() {
     info.append(a, b);
     if (tr.tuning && tr.kind !== 'drums') { const c = document.createElement('div'); c.className = 'small tuning'; c.textContent = 'Строй: ' + tuningLine(tr.tuning, tr.kind); info.appendChild(c); }
     const showBtn = document.createElement('button'); showBtn.className = 'chip';
-    const isFret = P.mode === 'fret', isDr = P.mode === 'drums';
+    const isFret = P.mode === 'fret' || P.mode === 'road', isDr = P.mode === 'drums';
     const canShow = isFret ? !!(tr.tuning && tr.notes.some(n => n.s != null)) : isDr ? tr.kind === 'drums' : tr.kind !== 'drums';
     const on = isFret ? P.gTrack === i : isDr ? P.dTrack === i : P.show.includes(i);
     showBtn.textContent = isFret ? (on ? 'На грифе' : 'Гриф') : isDr ? (on ? 'Показ ✓' : 'Показ') : (on ? 'Показ ✓' : 'Показ');
@@ -1376,7 +1379,7 @@ const tuner = initTuner({ show, engine, toast });
 const metro = initMetronome({ show });
 $('metroHome').onclick = () => metro.open('home');
 $('metroBtn2').onclick = () => { $('sheet').classList.remove('on'); engine.pause(); if (P.land) exitLand(true); const bpm = P.song && P.song.tempos && P.song.tempos[0] ? P.song.tempos[0].bpm * P.speed : null; metro.open('player', bpm); };
-train = initTrain({ P, engine, toast, curTimbre, prepare, setSpeed, updateUi, saveSet });
+train = initTrain({ P, engine, toast, curTimbre, prepare, setSpeed, updateUi, saveSet, setLoop });
 function openTunerFor(tr) {
   engine.pause(); if (P.land) exitLand(true);
   const pr = tr && tr.tuning ? tunerPresetFor(tr.tuning, tr.kind) : null;

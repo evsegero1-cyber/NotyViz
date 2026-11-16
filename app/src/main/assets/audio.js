@@ -502,7 +502,9 @@ export class AudioEngine {
   songSecAt(ct) {
     const A = this.anchors; if (!A.length) return this.posSec;
     let a = A[0]; for (const x of A) if (x.ctx <= ct + 1e-9) a = x;
-    return a.sec + Math.max(0, ct - a.ctx) * a.speed;
+    let s = a.sec + Math.max(0, ct - a.ctx) * a.speed;
+    if (this.loop && this.time) { const lb = this.time.toSec(this.loop.b); if (s > lb) s = lb; } // во время отсчёта стоим в конце фрагмента
+    return s;
   }
   ctxAtSong(sec, a) { return a.ctx + (sec - a.sec) / a.speed; }
   // То, что сейчас звучит из динамика (с поправкой на задержку вывода)
@@ -580,6 +582,12 @@ export class AudioEngine {
         const ct = this.ctxAtSong(loopB, a), sa = this.time.toSec(this.loop.a);
         const na = { ctx: ct, sec: sa, speed: a.speed };
         if (this.onLoopWrap) { const ns = this.onLoopWrap(); if (ns && ns !== a.speed) { na.speed = ns; this.speed = ns; } }
+        // отсчёт метронома перед кругом: пауза на такт и щелчки
+        if (this.countIn && this.countIn.beats) {
+          const bc = this.countIn.beat / na.speed;
+          for (let k = 0; k < this.countIn.beats; k++) this.click(ct + k * bc, k === 0);
+          na.ctx = ct + this.countIn.beats * bc;
+        }
         this.anchors.push(na); if (this.anchors.length > 4) this.anchors.splice(0, this.anchors.length - 4);
         this.cursor = this.indexAt(sa); this.mCursor = this.mIndexAt(sa);
         // заглушить хвосты нот, которые тянутся через конец фрагмента
@@ -619,6 +627,7 @@ export class AudioEngine {
   }
   async loadMetro() { if (this.metroLoading) return; this.metroLoading = true; this.metroInst = await this.bank.program('gm', 'drums', r => r.lk <= 34 && r.hk >= 33); }
   setMetronome(on) { this.metro = on; if (on && !this.metroInst) this.loadMetro(); }
+  setCountIn(beats, beatSec) { this.countIn = beats ? { beats, beat: beatSec } : null; if (beats && !this.metroInst) this.loadMetro(); }
 
   startEvent(e, when, a) {
     if (this.ctx.fake) { if (e._sched === a) this.stats.dupes++; e._sched = a; this.log.push({ i: e.i, tr: e.tr, s: e.s, when, speed: a.speed, now: this.ctx.currentTime }); return; }
