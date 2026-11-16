@@ -5,7 +5,7 @@ import TEMPLATES from './templates.js';
 
 const GW = 8, GH = 11;
 // Версия разбора: при её смене сохранённые PDF Songsterr разбираются заново (2 — паузы, глухие ноты, штили ударных)
-export const PARSER_VERSION = 3;
+export const PARSER_VERSION = 4; // 3 — форшлаги, бенды, части; 4 — слова песни
 
 function mul(m, n) {
   return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
@@ -23,9 +23,30 @@ export async function walkPage(page, O) {
   let ctm = [1, 0, 0, 1, 0, 0], st = [], fill = [0, 0, 0], stroke = [0, 0, 0];
   const out = [];
   const H = page.view[3];
+  // буквы текста с точным положением (подписи слов песни в PDF идут по одной букве)
+  const chars = []; out.chars = chars;
+  let tm = [1, 0, 0, 1, 0, 0], lm = tm, fsz = 10, cs = 0, ws = 0, hs = 1;
   for (let i = 0; i < ol.fnArray.length; i++) {
     const f = ol.fnArray[i], a = ol.argsArray[i];
-    if (f === O.save) st.push([ctm, fill, stroke]);
+    if (f === O.beginText) { tm = lm = [1, 0, 0, 1, 0, 0]; }
+    else if (f === O.setFont) fsz = a[1] || fsz;
+    else if (f === O.setTextMatrix) { const m = Array.isArray(a[0]) ? a[0] : a; tm = lm = [m[0], m[1], m[2], m[3], m[4], m[5]]; }
+    else if (f === O.moveText) { lm = mul(lm, [1, 0, 0, 1, a[0], a[1]]); tm = lm; }
+    else if (f === O.setCharSpacing) cs = a[0];
+    else if (f === O.setWordSpacing) ws = a[0];
+    else if (f === O.setHScale) hs = a[0] / 100;
+    else if (f === O.showText || f === O.showSpacedText) {
+      for (const gq of a[0] || []) {
+        if (typeof gq === 'number') { tm = mul(tm, [1, 0, 0, 1, -gq / 1000 * fsz * hs, 0]); continue; }
+        if (!gq) continue;
+        const M = mul(ctm, tm), x = M[4], y = H - M[5], sc = Math.hypot(M[2], M[3]) * fsz;
+        const adv = ((gq.width || 0) / 1000 * fsz + cs + (gq.isSpace ? ws : 0)) * hs;
+        const xw = Math.hypot(M[0], M[1]) * adv;
+        chars.push({ c: gq.unicode || '', x, y, w: xw, h: sc, color: fill });
+        tm = mul(tm, [1, 0, 0, 1, adv, 0]);
+      }
+    }
+    else if (f === O.save) st.push([ctm, fill, stroke]);
     else if (f === O.restore) { if (st.length) [ctm, fill, stroke] = st.pop(); }
     else if (f === O.transform) ctm = mul(ctm, a);
     else if (f === O.paintFormXObjectBegin) { st.push([ctm, fill, stroke]); if (a[0]) ctm = mul(ctm, a[0]); }
@@ -524,7 +545,33 @@ async function parsePage(page, O, pageNo) {
       }
     }
     // маркато рисуется поверх акцента в одной колонке — оставляем более сильное обозначение
-    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, dead, arcs, voices, marks, rests, dots });
+    // Слова песни: строка под ритмом (буквы ~10 pt), разбиваем на слоги по промежуткам
+    const lyr = [];
+    {
+      const band = (out.chars || []).filter(ch => ch.y > bot + 14 && ch.y < bot + 80 && ch.x > sx0 - 5 && ch.x < sx1 + 5 && ch.h > 8 && ch.h < 13);
+      band.sort((a, b) => a.y - b.y || a.x - b.x);
+      const rowsY = cluster(band.map(c => c.y), 2);
+      const rowOf = c => rowsY.reduce((bi, y, i) => Math.abs(y - c.y) < Math.abs(rowsY[bi] - c.y) ? i : bi, 0);
+      // ряд слов — самый нижний ряд с буквами (выше могут быть подписи вроде «let ring»)
+      const best = rowsY.length ? rowsY.reduce((bi, y, i) => band.filter(c => rowOf(c) === i).length > band.filter(c => rowOf(c) === bi).length ? i : bi, 0) : -1;
+      const row = band.filter(c => rowOf(c) === best).sort((a, b) => a.x - b.x);
+      // ширина буквы из шрифта бывает в другом масштабе — поправку берём по соседним буквам
+      const rat = [];
+      for (let k = 1; k < row.length; k++) { const a = row[k - 1], b = row[k]; if (a.w > 0 && a.c.trim() && b.c.trim()) { const r = (b.x - a.x) / a.w; if (r > 0.2 && r < 1.6) rat.push(r); } }
+      rat.sort((a, b) => a - b);
+      const kw = rat.length ? rat[Math.floor(rat.length * 0.3)] : 1;
+      let cur = null;
+      for (const ch of row) {
+        const w = ch.w * kw;
+        if (!ch.c.trim() || ch.c === '_') { cur = null; continue; } // пробел и «_» (протяжка) — граница слова
+        if (ch.c === '-' && cur) { cur.s += '-'; cur.x1 = ch.x + w; cur = null; continue; } // перенос слога
+        const gap = cur ? ch.x - cur.x1 : 1e9;
+        if (!cur || gap > Math.max(0.8, ch.h * 0.09)) { cur = { s: '', x0: ch.x, x1: ch.x + w, y: ch.y }; lyr.push(cur); }
+        cur.s += ch.c; cur.x1 = ch.x + w;
+      }
+    }
+    const lyrics = lyr.filter(w => /[A-Za-zА-Яа-яЁё]/.test(w.s) && !/^\d+$/.test(w.s) && !/^(P\.?M\.?|let|ring|rake|full|N\.?H\.?|A\.?H\.?)$/i.test(w.s));
+    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, dead, arcs, voices, marks, rests, dots, lyrics });
   }
   return { systems: res, texts };
 }
@@ -829,6 +876,26 @@ export function buildSong(systems, meta) {
     const type = first > 0 && last === 0 ? (first === max ? 'prebendRelease' : 'release') : first > 0 ? 'prebend' : last === 0 ? 'bendRelease' : 'bend';
     n.x2 = n.x2 || {}; n.x2.bend = { type, max, pts };
   }
+  // Слова песни → доли: слог стоит под своей нотой (ближайший штиль), иначе — по положению в такте
+  const lyrics = [];
+  for (const sy of systems) for (const w of sy.lyrics || []) {
+    const cx = (w.x0 + w.x1) / 2;
+    const m = ms.find(m => m.sy === sy && cx >= m.x0 - 2 && cx < m.x1 + 2) || ms.find(m => m.sy === sy && w.x0 >= m.x0 - 2 && w.x0 < m.x1);
+    if (!m) continue;
+    const ev = (sy.ev || []).filter(e => e.x >= m.x0 - 1 && e.x <= m.x1 + 1).sort((a, b) => a.x - b.x);
+    let best = null, bd = 9;
+    for (const e of ev) { const d = Math.min(Math.abs(e.x - cx), Math.abs(e.x - w.x0 - 3)); if (d < bd) { bd = d; best = e; } }
+    let t;
+    if (best) t = best.t0;
+    else {
+      const pts = [[m.x0 + 6, m.start], ...ev.map(e => [e.x, e.t0]), [m.x1, m.start + m.len]];
+      t = m.start + m.len * Math.max(0, Math.min(1, (cx - m.x0) / Math.max(1, m.x1 - m.x0)));
+      for (let k = 1; k < pts.length; k++) if (cx <= pts[k][0]) { const [xa, ta] = pts[k - 1], [xb, tb] = pts[k]; t = ta + (tb - ta) * Math.max(0, Math.min(1, (cx - xa) / Math.max(1, xb - xa))); break; }
+      t = Math.round(t * 4) / 4;
+    }
+    lyrics.push({ start: +t.toFixed(4), s: w.s });
+  }
+  lyrics.sort((a, b) => a.start - b.start);
   // ударные: головки в положении, которому нет элемента установки, не озвучиваем — показываем для проверки
   const unknown = isDrum ? outNotes.filter(n => n.midi == null).map(n => ({ start: +n.start.toFixed(4), measure: n.measure, page: n.sy.page, head: n.src.head, step: n.src.step, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)) })) : [];
   const clean = outNotes.filter(n => n.midi != null).map(n => ({ midi: n.midi, start: +n.start.toFixed(4), dur: +n.dur.toFixed(4), string: n.string, fret: n.fret, measure: n.measure, voice: n.gray ? 1 : 0,
@@ -838,6 +905,6 @@ export function buildSong(systems, meta) {
     pv: PARSER_VERSION, title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
     measures: ms.filter(m => !m.cont).map(m => ({ n: m.n, start: m.start, len: m.fullLen || m.len, tempo: m.tempo, sig: m.sig, ...(m.marker ? { marker: m.marker } : {}), ...(m.squeezed || m.short || m.restMismatch ? { rhythmCheck: true } : {}) })),
-    totalBeats: total, notes: clean, unknown
+    totalBeats: total, notes: clean, unknown, ...(lyrics.length ? { lyrics } : {})
   };
 }

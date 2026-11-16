@@ -225,6 +225,7 @@ export function fromBeatSong(old) {
   };
   const hd = handFromName(track.name + ' ' + track.instrument); if (hd) track.hand = hd;
   const song = { v: 2, id: old.id, title: old.title, source: 'pdf', pv: old.pv, tempos, measures, totalTicks: B(old.totalBeats), tracks: [track] };
+  if (old.lyrics && old.lyrics.length) song.lyrics = old.lyrics.map(w => ({ t: B(w.start), s: w.s }));
   assignChannels(song.tracks);
   return song;
 }

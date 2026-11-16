@@ -210,9 +210,9 @@ async function openSong(id) {
         if (fresh.tracks[0].notes.length) {
           const tr = fresh.tracks[0], o = song.tracks[0];
           for (const k of ['name', 'program', 'hand', 'channel']) if (o[k] != null) tr[k] = o[k];
-          Object.assign(song, { pv: fresh.pv, tempos: fresh.tempos, measures: fresh.measures, totalTicks: fresh.totalTicks, tracks: fresh.tracks });
+          Object.assign(song, { pv: fresh.pv, tempos: fresh.tempos, measures: fresh.measures, totalTicks: fresh.totalTicks, tracks: fresh.tracks }); if (fresh.lyrics) song.lyrics = fresh.lyrics; else delete song.lyrics;
           await idb.put('songs', song.id, song); await idb.put('meta', song.id, songSummary(song));
-          toast('Файл разобран заново: учтены паузы и ритм ударных');
+          toast('Файл разобран заново новой версией разбора');
         }
       } catch (e) { console.warn(e); }
       busy(false);
@@ -236,6 +236,7 @@ async function openSong(id) {
   prepare();
   P.secEdit = set.secEdit || {};
   computeSections();
+  buildLyr();
   $('pTitle').textContent = song.title;
   updateSub();
   show('player');
@@ -463,6 +464,7 @@ function frame() {
     if (P.song.omr && P.keysNotes.length) { if (!W) resize(); g.setTransform(DPR, 0, 0, DPR, 0, 0); P.hot = []; piano.draw(g, W, H, { t, tick, hot: null, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: null, notes: P.keysNotes, land: false, pressed: P.pressed, pedal: P.pedal }); }
   }
   if (train) train.frame(t);
+  updLyr(t);
   const now = performance.now();
   if (now - lastUi > 150) {
     lastUi = now;
@@ -482,6 +484,48 @@ function tuningLabels(tr) {
   return tr.tuning.map((m, i) => { const s = L[m % 12]; return i === 0 ? s.toLowerCase() : s; });
 }
 
+
+// ---------- Слова песни ----------
+// строки: новая строка, если пауза между словами больше ~1,6 с или в строке уже много слов
+function buildLyr() {
+  const L = P.song.lyrics || [];
+  const words = L.map(w => ({ s: w.s, t: P.time.toSec(w.t) })).sort((a, b) => a.t - b.t);
+  const lines = []; let cur = null;
+  words.forEach((w, i) => {
+    const prev = words[i - 1];
+    const brk = !cur || (w.t - prev.t > 1.6 && !prev.s.endsWith('-')) || (cur.n >= 9 && !prev.s.endsWith('-'));
+    if (brk) { cur = { a: i, n: 0 }; lines.push(cur); }
+    cur.b = i; cur.n++; w.line = lines.length - 1;
+  });
+  P.lyr = { words, lines, cur: -2, line: -2 };
+  const has = words.length > 0;
+  for (const id of ['lyrP', 'lyrL']) { const e = $(id); e.innerHTML = ''; e.classList.toggle('none', !has); e.classList.toggle('off', !lyrOn()); }
+}
+const lyrOn = () => ls.get('nv-lyr', true) !== false;
+function lyrHtml(li, wi) {
+  const { words, lines } = P.lyr, ln = lines[li]; if (!ln) return '';
+  let h = '';
+  for (let i = ln.a; i <= ln.b; i++) {
+    const w = words[i], txt = w.s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    h += `<span class="${i < wi ? 'sung' : i === wi ? 'now' : ''}">${txt}</span>${w.s.endsWith('-') ? '' : ' '}`;
+  }
+  return h;
+}
+function updLyr(t) {
+  const Ly = P.lyr; if (!Ly || !Ly.words.length) return;
+  const W = Ly.words;
+  let wi = -1; { let lo = 0, hi = W.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (W[m].t <= t + 0.05) { wi = m; lo = m + 1; } else hi = m - 1; } }
+  // показываем строку текущего слова; если до следующей строки меньше 1,2 с — уже её
+  let li = wi >= 0 ? W[wi].line : 0;
+  const nx = Ly.lines[li + 1]; if (nx && W[nx.a].t - t < 1.2 && (wi < 0 || wi === Ly.lines[li].b)) li = li + 1;
+  if (wi < 0 && W[0].t - t > 4) li = -1;
+  if (wi === Ly.cur && li === Ly.line) return;
+  Ly.cur = wi; Ly.line = li;
+  const main = li >= 0 ? lyrHtml(li, wi) : '', next = li + 1 < Ly.lines.length ? lyrHtml(li + 1, -1) : '';
+  const html = `<div class="l1">${main || '&nbsp;'}</div><div class="l2">${next || '&nbsp;'}</div>`;
+  $('lyrP').innerHTML = html; $('lyrL').innerHTML = html;
+}
+for (const id of ['lyrP', 'lyrL']) $(id).onclick = () => { ls.set('nv-lyr', !lyrOn()); for (const k of ['lyrP', 'lyrL']) $(k).classList.toggle('off', !lyrOn()); };
 
 // ---------- Части песни ----------
 function computeSections() {

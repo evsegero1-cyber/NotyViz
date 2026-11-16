@@ -167,7 +167,11 @@ export function mergeSongs(files, refIdx, title, pianoName) {
     measures.unshift(...pre); measures.forEach((m, i) => m.n = i + 1);
     total += shift;
   }
-  const song = { v: 2, pv: PARSER_VERSION, title, source: 'merge', custom: true, tempos, measures, totalTicks: total, tracks, files: files.map(f => f.name) };
+  // слова песни: из партии вокала, иначе из первого файла, где они есть
+  let lyrics = null;
+  const lf = files.find(f => f.song.lyrics && f.song.lyrics.length && f.song.tracks.some(t => /vocal|voice|вокал|голос/i.test(t.name + ' ' + (t.instrument || '')))) || files.find(f => f.song.lyrics && f.song.lyrics.length);
+  if (lf) { const map = mapper(lf, ref, { method: lf.method, offset: lf.offset }); lyrics = lf.song.lyrics.map(w => ({ t: Math.round(map(w.t)) + shift, s: w.s })); }
+  const song = { v: 2, pv: PARSER_VERSION, title, source: 'merge', custom: true, tempos, measures, totalTicks: total, tracks, files: files.map(f => f.name), ...(lyrics ? { lyrics } : {}) };
   extendMeasures(song);
   for (const tr of tracks) { tr.notes.sort((a, b) => a.t - b.t || a.m - b.m); for (const n of tr.notes) n.bar = barOf(song.measures, n.t); }
   const ok = assignChannels(tracks);
