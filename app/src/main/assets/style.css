@@ -203,3 +203,28 @@ input[type=number].sm{width:70px}
 .nbox .nl{position:absolute;left:100%;top:-3px;font:600 9px/1 system-ui;color:#2a6fd6;white-space:nowrap;padding-left:1px;pointer-events:none}
 .nbox.unsure .nl{color:#c77700}
 .omr-body>div{margin:6px 0}.omr-big{font-weight:600}.omr-warn{color:#ffb02e}
+
+/* Тюнер */
+.tubody{flex:1;display:flex;flex-direction:column;padding:10px 14px calc(14px + env(safe-area-inset-bottom));gap:10px;min-height:0;overflow-y:auto}
+.tusel{display:flex;gap:8px}.tusel select{flex:1;min-width:0}
+#tuCv{width:100%;flex:1;min-height:220px;max-height:420px}
+.tustrings{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.tustr{display:flex;flex-direction:column;align-items:center;min-width:46px;padding:6px 8px;border-radius:12px;line-height:1.1}
+.tustr b{font-size:18px}.tustr span{font-size:11px;color:var(--mut)}
+.tustr.cur{border-color:#ffd23f}
+.tustr.sel{background:rgba(76,154,255,.25);border-color:var(--acc)}
+.tustr.ok{border-color:#3ccf8e;color:#3ccf8e}
+.tustr.ok span::after{content:' ✓'}
+.tuauto{align-self:center}
+.tuhint{text-align:center;margin:0}
+@media (orientation:landscape) and (max-height:600px){
+  .tubody{flex-direction:row;flex-wrap:wrap;align-content:flex-start}
+  .tusel{width:100%}
+  #tuCv{flex:1 1 55%;min-height:190px;height:calc(100vh - 140px)}
+  .tubody>.tustrings{flex:1 1 35%;align-content:center}
+  .tuauto,.tuhint{display:none}
+}
+/* громкость дорожки в списке дорожек */
+.trow-vol{display:flex;align-items:center;gap:10px;padding-left:22px}
+.trow-vol input{flex:1}.trow-vol span{min-width:42px;text-align:right}
+.tuning{color:#9cc5ff}

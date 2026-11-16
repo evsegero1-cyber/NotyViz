@@ -114,7 +114,7 @@ export class Engine {
   previewTimbre(program) {
     const p = program || 0;
     if (p <= 1) return 'grand'; if (p === 4) return 'rhodes'; if (p === 25) return 'agtr'; if (p === 24) return 'nylon';
-    if (p === 27 || p === 28) return 'egtr_clean'; if (p === 29 || p === 30) return 'egtr_amp'; if (p === 33) return 'bass_finger';
+    if (p === 27 || p === 28) return 'egtr_clean'; if (p === 29) return 'egtr_crunch'; if (p === 30) return 'egtr_dist'; if (p === 33) return 'bass_finger';
     return 'gm:' + p;
   }
 }

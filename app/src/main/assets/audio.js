@@ -55,13 +55,13 @@ export function defaultTimbre(tr, progOverride, trusted) {
   const p = progOverride != null ? progOverride : (tr.program || 0);
   if (tr.kind === 'drums') return 'kit_live';
   if (p <= 7 && (tr.kind === 'piano' || progOverride != null || trusted || !isStringKind(tr.kind))) return ({ 0: 'grand', 1: 'bright', 2: 'cp70', 3: 'gm:3', 4: 'rhodes', 5: 'fmep', 6: 'gm:6', 7: 'gm:7' })[p];
-  if (p >= 24 && p <= 31) return ({ 24: 'nylon', 25: 'agtr', 26: 'jazz', 27: 'egtr_clean', 28: 'egtr_clean', 29: 'egtr_amp', 30: 'egtr_amp', 31: 'gm:31' })[p];
+  if (p >= 24 && p <= 31) return ({ 24: 'nylon', 25: 'agtr', 26: 'jazz', 27: 'egtr_clean', 28: 'egtr_clean', 29: 'egtr_crunch', 30: 'egtr_dist', 31: 'gm:31' })[p];
   if (p >= 32 && p <= 37) return ({ 32: 'bass_acoustic', 33: 'bass_finger', 34: 'bass_pick', 35: 'bass_fretless', 36: 'bass_slap', 37: 'bass_pop' })[p];
   // номер инструмента неизвестен (0 у гитарной/басовой дорожки) — по типу дорожки
   if (p === 0 && progOverride == null && !trusted) {
     if (tr.kind === 'bass') return 'bass_finger';
     if (tr.kind === 'aguitar') return 'agtr';
-    if (tr.kind === 'eguitar' || tr.kind === 'guitar') return 'egtr_amp';
+    if (tr.kind === 'eguitar' || tr.kind === 'guitar') return 'egtr_dist';
   }
   return 'gm:' + p;
 }

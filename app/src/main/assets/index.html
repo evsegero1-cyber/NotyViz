@@ -16,6 +16,7 @@
   </header>
   <button id="importBtn" class="primary big">Импортировать файл</button>
   <button id="mergeBtn" class="big">Объединить файлы</button>
+  <button id="tunerBtn" class="big">🎸 Тюнер</button>
   <p class="muted small">PDF-табулатуры Songsterr, MIDI (.mid), Guitar Pro (.gp, .gp3, .gp4, .gp5, .gpx) и MusicXML. Файл можно открыть и из «Загрузок» или через «Поделиться» → NotyViz.</p>
   <div id="soundState" class="muted small"></div>
   <h2 class="sec">Последние</h2>
@@ -51,6 +52,7 @@
       <span id="lPos" class="lpos">Такт 1</span>
       <button id="lSpeed">100%</button>
       <button id="lLoop">⟲</button>
+      <button id="lMode" aria-label="Другой вид">🎸</button>
       <button id="lSet" aria-label="Настройки">⚙</button>
     </div>
     <div id="landProg" class="landprog"><div></div></div>
@@ -72,6 +74,21 @@
   </div>
 </section>
 
+
+<section id="tuner" class="screen">
+  <header class="pbar">
+    <button id="tuBack" class="icon" aria-label="Назад">‹</button>
+    <div class="ptitle"><div>Тюнер</div><div class="muted small">Микрофон слушает, пока открыт этот экран</div></div>
+    <button id="tuA4" class="chip">A = 440 Гц</button>
+  </header>
+  <div class="tubody">
+    <div class="tusel"><select id="tuInst"></select><select id="tuTun"></select></div>
+    <canvas id="tuCv"></canvas>
+    <div id="tuStrings" class="tustrings"></div>
+    <button id="tuAuto" class="chip on tuauto">Авто</button>
+    <p class="muted small tuhint">Нажмите на струну — прозвучит её нота, и тюнер будет слушать только её. Зелёная галочка — струна настроена.</p>
+  </div>
+</section>
 
 <section id="merge" class="screen">
   <header class="pbar">
@@ -132,7 +149,7 @@
   <div class="sheet-body">
     <div class="sheet-head"><b>Настройки</b><button class="icon" data-close>✕</button></div>
 
-    <div class="row btns"><button id="soundBtn" class="chip on">🎚 Звуки и инструменты</button><button id="diagBtn" class="chip">Диагностика и тесты</button><button id="omrBtn" class="chip">Отчёт распознавания</button></div>
+    <div class="row btns"><button id="soundBtn" class="chip on">🎚 Звуки и инструменты</button><button id="tunerBtn2" class="chip">🎸 Тюнер</button><button id="diagBtn" class="chip">Диагностика и тесты</button><button id="omrBtn" class="chip">Отчёт распознавания</button></div>
 
     <label class="lbl">Скорость</label>
     <div class="seg" id="speedSeg"></div>
@@ -172,7 +189,7 @@
 <div id="trackSheet" class="sheet">
   <div class="sheet-body">
     <div class="sheet-head"><b>Дорожки</b><button class="icon" data-close>✕</button></div>
-    <p class="muted small">«Показ» — какие дорожки видны на клавишах (на грифе — одна). «Звук» — отключить или включить инструмент.</p>
+    <p class="muted small">«Показ» — какие дорожки видны на клавишах (на грифе — одна). «Звук» — отключить или включить инструмент, ползунок — его громкость.</p>
     <div id="tList"></div>
     <button id="toEditor" class="wide" style="margin-top:14px">Редактор композиции: громкость, темп, сдвиг, удаление, экспорт</button>
   </div>

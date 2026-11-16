@@ -209,8 +209,12 @@ export class GuitarView {
     };
     const addHot = (x, y, w, h, x2, kind) => { if (!hot || !x2 || hot.length > 300) return; const ids = techIds(x2, kind); if (ids.length) hot.push({ x, y, w, h, ids }); };
     g.fillStyle = '#0f1115'; g.fillRect(0, 0, W, H);
-    const strGap = Math.max(11, Math.min(18, H * 0.028));
-    const tabTop = 22, tabH = strGap * (n - 1) + tabTop + 16;
+    // в полноэкранном режиме сверху место под панель кнопок; на низком экране (телефон боком)
+    // табулатура и гриф ужимаются, чтобы падающим нотам осталось не меньше ~40% высоты
+    const topPad = ctx.land ? 44 : 0, avail = H - topPad;
+    let strGap = Math.max(11, Math.min(18, H * 0.028));
+    while (strGap > 6.5 && (strGap * (n - 1) + 38) + (strGap * 1.25 * (n - 1) + 36) > avail * 0.6) strGap -= 0.5;
+    const tabTop = topPad + 22, tabH = strGap * (n - 1) + tabTop + 16;
     const fbH = strGap * 1.25 * (n - 1) + 36;
     const roadTop = tabH + 6, roadBot = H - fbH;
     // --- лента табулатуры ---
@@ -221,6 +225,7 @@ export class GuitarView {
     for (let s = 0; s < n; s++) { const y = tabTop + s * strGap + .5; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
     g.fillStyle = '#8b93a3'; g.font = '11px system-ui'; g.textBaseline = 'middle'; g.textAlign = 'left';
     if (tuningNames) for (let s = 0; s < n; s++) g.fillText(tuningNames[s] || '', 3, tabTop + s * strGap);
+    if (ctx.tuningTitle) { g.font = '600 11px system-ui'; g.fillStyle = '#9cc5ff'; g.fillText('Строй: ' + ctx.tuningTitle, 3, topPad + 9); g.font = '11px system-ui'; g.fillStyle = '#8b93a3'; }
     const xOfT = s => playX + (s - t) * pxs;
     for (let i = Math.max(0, ctx.measureIdx - 2); i < ctx.mStarts.length; i++) {
       const x = xOfT(ctx.mStarts[i]); if (x > W) break; if (x < 0) continue;

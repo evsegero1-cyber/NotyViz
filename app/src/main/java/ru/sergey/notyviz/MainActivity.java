@@ -14,6 +14,10 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebChromeClient;
+import android.webkit.PermissionRequest;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.widget.Toast;
 import android.content.ClipData;
 import android.content.pm.ActivityInfo;
@@ -35,6 +39,8 @@ public class MainActivity extends Activity {
     private static final int REQ_OPEN = 1;
     private static final int REQ_MULTI = 2;
     private static final int REQ_SAVE = 3;
+    private static final int REQ_MIC = 4;
+    private PermissionRequest pendingMic = null;
     private static final String START = "https://appassets.androidplatform.net/assets/index.html";
 
     private WebView web;
@@ -90,7 +96,38 @@ public class MainActivity extends Activity {
                 pendingIntent = null;
             }
         });
+        // Микрофон для тюнера: страница просит доступ → спрашиваем разрешение Android → отдаём странице
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                runOnUiThread(() -> {
+                    boolean wantsMic = false;
+                    for (String r : request.getResources()) if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) wantsMic = true;
+                    if (!wantsMic) { request.deny(); return; }
+                    if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                        request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                    } else {
+                        if (pendingMic != null) pendingMic.deny();
+                        pendingMic = request;
+                        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+                    }
+                });
+            }
+        });
         web.loadUrl(START);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_MIC || pendingMic == null) return;
+        boolean ok = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (ok) pendingMic.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+        else {
+            pendingMic.deny();
+            Toast.makeText(this, "Без доступа к микрофону тюнер не слышит гитару", Toast.LENGTH_LONG).show();
+        }
+        pendingMic = null;
     }
 
     @Override
