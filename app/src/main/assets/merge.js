@@ -59,7 +59,7 @@ export function analyze(files, refIdx) {
       if (!it.sameTempo) warnings.push(`«${f.name}»: другой темп (${it.tempo}, у основного ${tempoText(ref)}). Выберите, как синхронизировать: по тактам или по реальному времени.`);
       if (!it.sameMeter) warnings.push(`«${f.name}»: размер или длина тактов не совпадают с основным (${it.sig}). Проверьте результат на слух.`);
       // партии одной песни (темп, размер и число тактов совпадают) вступают в разное время — это нормально, сдвигать не нужно
-      const sameSong = it.sameTempo && it.sameMeter && s.measures.length === ref.measures.length;
+      const sameSong = it.sameTempo && it.sameMeter && Math.abs(s.measures.length - ref.measures.length) <= 2; // последний пустой такт партия может не печатать
       if (it.startDiff && !sameSong) warnings.push(`«${f.name}»: первая нота в ${it.first}, у основного — такт ${refFirst.bar}${refFirst.beat > 1.01 ? ', доля ' + (+refFirst.beat.toFixed(2)) : ''}. Если партия вступает позже по задумке — ничего не меняйте; иначе задайте смещение или нажмите «Выровнять начало».`);
     }
     return it;
@@ -153,6 +153,8 @@ export function mergeSongs(files, refIdx, title, pianoName) {
   // Если смещение увело ноты раньше начала — сдвигаем всё вместе, чтобы ничего не потерять
   const shift = minT < 0 ? Math.ceil(-minT / ref.measures[0].len) * ref.measures[0].len : 0;
   const measures = ref.measures.map(m => ({ ...m, sig: [...m.sig] }));
+  // метки частей (Intro, Chorus…) — из любого файла с тем же числом тактов
+  if (!measures.some(m => m.marker)) for (const f of files) if (f.song.measures.length === measures.length && f.song.measures.some(m => m.marker)) { f.song.measures.forEach((m, i) => { if (m.marker) measures[i].marker = m.marker; }); break; }
   const tempos = ref.tempos.map(t => ({ ...t }));
   if (shift) {
     for (const tr of tracks) { for (const n of tr.notes) n.t += shift; if (tr.bends) for (const b of tr.bends) b[0] += shift; if (tr.pedal) for (const q of tr.pedal) { q[0] += shift; q[1] += shift; } }

@@ -490,6 +490,7 @@ function computeSections() {
       P.song.measures.forEach((m, i) => { const mb = sc.masterBars[m.n - 1]; if (mb && mb.section && (mb.section.text || mb.section.marker)) markers.push({ idx: i, text: mb.section.text || mb.section.marker }); });
     }
   } catch (e) { markers = null; }
+  if (!markers || !markers.length) { const mk = []; P.song.measures.forEach((m, i) => { if (m.marker) mk.push({ idx: i, text: m.marker }); }); if (mk.length) markers = mk; }
   let secs = [];
   try { secs = detectSections(P.song, markers); } catch (e) { console.warn(e); }
   for (const sc of secs) { const nm = P.secEdit && P.secEdit[sc.a]; if (nm) sc.name = nm; }

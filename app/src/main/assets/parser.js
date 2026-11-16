@@ -5,7 +5,7 @@ import TEMPLATES from './templates.js';
 
 const GW = 8, GH = 11;
 // Версия разбора: при её смене сохранённые PDF Songsterr разбираются заново (2 — паузы, глухие ноты, штили ударных)
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 function mul(m, n) {
   return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
@@ -18,7 +18,7 @@ function bbox(pts) {
 }
 
 // Все контуры страницы в координатах страницы (y вниз), с цветом и типом (заливка/обводка)
-async function walkPage(page, O) {
+export async function walkPage(page, O) {
   const ol = await page.getOperatorList();
   let ctm = [1, 0, 0, 1, 0, 0], st = [], fill = [0, 0, 0], stroke = [0, 0, 0];
   const out = [];
@@ -117,6 +117,7 @@ function extractGlyphs(out) {
     if (g.subs.length === 1 && nC >= 4 && nL === 0 && ar > 1.05 && ar < 1.7 && w > 4 && w < 11) head = 'head';
     else if (g.subs.length === 1 && nL >= 8 && nC === 0 && ar > 0.75 && ar < 1.35 && w > 4) head = w > 7.3 ? 'xbig' : 'x';
     else if (nC >= 5 && ar > 0.85 && ar < 1.18 && w > 7 && w < 12) head = 'xcirc';
+    else if (g.subs.length === 2 && /^MLLLLZ?$/.test(t0) && nC === 0 && ar > 0.8 && ar < 1.25 && w > 5 && w < 10) head = 'diamond'; // ромб — райд-белл / ковбелл
     if (head) { g.label = head; g.head = true; g.w = w; g.h = h; g.cx = (g.b.x0 + g.b.x1) / 2; g.cy = (g.b.y0 + g.b.y1) / 2; continue; }
     let best = null, bd = 1e9;
     for (const t of TEMPLATES) {
@@ -200,12 +201,71 @@ export function findRests(out, st) {
 }
 
 // Разбор одной страницы: станы, такты, ноты-цифры, штили, лиги
+const BEND_AMT = { 'full': 2, '½': 1, '¼': 0.5, '¾': 1.5, '1½': 3, '1¼': 2.5, '1¾': 3.5, '2': 4, '2½': 5, '3': 6 };
+function detectTech(out, texts, notes, st) {
+  const { top, bot, sp, ys } = st;
+  const heads = [], shafts = [], slides = [], vibs = [], dashes = [];
+  for (const o of out) {
+    if (o.kind !== 'F' || !isGray(o.color) || o.color[0] > 150) continue;
+    for (const sb of o.subs) {
+      const b = sb.b, w = b.x1 - b.x0, h = b.y1 - b.y0, t = sb.t.join(''), P = sb.p;
+      if (b.y0 < top - sp * 9 || b.y1 > bot + sp * 1.5) continue;
+      if (t === 'MLLLZ' && w > 2 && h > 2 && w < 6 && h < 6) {
+        const pts = P.slice(0, 3), my = (pts[0][1] + pts[1][1] + pts[2][1]) / 3;
+        const apex = pts.reduce((a, q) => Math.abs(q[1] - my) > Math.abs(a[1] - my) ? q : a);
+        heads.push({ x: apex[0], y: apex[1], up: apex[1] < my });
+      } else if (/^MC/.test(t) && P.length >= 4 && h > 6 && Math.abs(P[0][1] - P[3][1]) > 5) {
+        const A = P[0], B = P[3]; const hi = A[1] < B[1] ? A : B, lo = hi === A ? B : A;
+        shafts.push({ hi: { x: hi[0], y: hi[1] }, lo: { x: lo[0], y: lo[1] }, vert: Math.abs(hi[0] - lo[0]) < 3 });
+      } else if (t === 'MLLLLZ' && w > 3 && h > 3 && w < 9 && h < 9 && b.y0 > top - 4 && b.y1 < bot + 4) {
+        let a = P[0], c = P[1], dm = 0; for (const p1 of P) for (const p2 of P) { const d = Math.hypot(p1[0] - p2[0], p1[1] - p2[1]); if (d > dm) { dm = d; a = p1; c = p2; } }
+        slides.push({ x0: b.x0, x1: b.x1, cy: (b.y0 + b.y1) / 2, down: (c[0] - a[0]) * (c[1] - a[1]) > 0 });
+      } else if (t.length > 12 && /^ML(CL){3,}/.test(t) && h < 8 && w > 8 && b.y1 < top) vibs.push({ x0: b.x0, x1: b.x1, wide: h > 5.5 });
+      else if (t === 'MLLLLZ' && h < 1.2 && w < 6 && w > 1.5 && b.y1 < top) dashes.push(b);
+    }
+  }
+  const rowY = n => (n.b.y0 + n.b.y1) / 2;
+  const amtNear = (x, y) => { let best = null, bd = 1e9; for (const tx of texts) { const k = tx.s.replace(/\s+/g, ''); if (!(k in BEND_AMT)) continue; const cx = tx.x + (tx.w || 6) / 2, d = Math.abs(cx - x) + Math.abs(tx.y - y) * 0.7; if (d < bd && Math.abs(cx - x) < 12 && tx.y < y + 4 && tx.y > y - 16) { bd = d; best = BEND_AMT[k]; } } return best; };
+  for (const sh of shafts) {
+    const hd = heads.find(h => Math.hypot(h.x - sh.hi.x, h.y - sh.hi.y) < 7 || Math.hypot(h.x - sh.lo.x, h.y - sh.lo.y) < 7);
+    if (!hd) continue;
+    const atTop = Math.hypot(hd.x - sh.hi.x, hd.y - sh.hi.y) < 7;
+    if (atTop && hd.up) { // подтяжка: от цифры вверх
+      const amt = amtNear(sh.hi.x, sh.hi.y) || 2;
+      let n = null, bd = 1e9;
+      for (const q of notes) {
+        const d = sh.vert ? (sh.lo.x >= q.x0 - 3 && sh.lo.x <= q.x1 + 3 && sh.lo.y <= q.b.y0 + 3 && sh.lo.y > q.b.y0 - 12 ? Math.abs(sh.lo.y - q.b.y0) : 1e9)
+          : (Math.abs(sh.lo.x - q.x1) < 5 && Math.abs(sh.lo.y - rowY(q)) < sp * 0.9 ? Math.abs(sh.lo.x - q.x1) + Math.abs(sh.lo.y - rowY(q)) : 1e9);
+        if (d < bd) { bd = d; n = q; }
+      }
+      if (!n) continue;
+      if (sh.vert) n.pre = amt; else n.bend = amt;
+      // пунктир от верха стрелки — бенд держится до конца пунктира
+      let xe = sh.hi.x;
+      for (let more = true; more;) { more = false; for (const d of dashes) if (d.x0 > xe - 1 && d.x0 < xe + 6 && Math.abs(d.y0 - sh.hi.y) < 3) { xe = d.x1; more = true; } }
+      if (xe > sh.hi.x + 6) n.holdTo = xe;
+    } else if (!atTop && !hd.up) { // возврат: стрелка вниз к цифре
+      let n = null, bd = 1e9;
+      for (const q of notes) { if (sh.lo.x < q.x0 - 4 || sh.lo.x > q.x1 + 4) continue; const d = Math.abs(sh.lo.y - q.b.y0); if (d < 10 && d < bd) { bd = d; n = q; } }
+      if (n) { n.rel = amtNear(sh.hi.x, sh.hi.y) || true; if (sh.vert) n.preRel = true; }
+    }
+  }
+  for (const sl of slides) {
+    const row = notes.filter(q => Math.abs(rowY(q) - sl.cy) < sp * 0.6);
+    const left = row.filter(q => q.x1 <= sl.x0 + 2 && q.x1 > sl.x0 - 6).sort((a, b) => b.x1 - a.x1)[0];
+    const right = row.filter(q => q.x0 >= sl.x1 - 2 && q.x0 < sl.x1 + 6).sort((a, b) => a.x0 - b.x0)[0];
+    if (left) left.slide = sl.down ? 'down' : 'up';
+    else if (right) right.slideIn = sl.down ? 'above' : 'below';
+  }
+  for (const v of vibs) for (const q of notes) if (q.cx >= v.x0 - 4 && q.cx <= v.x1 + 2) q.vib = v.wide ? 'wide' : 'slight';
+}
+
 async function parsePage(page, O, pageNo) {
   const out = await walkPage(page, O);
   const tc = await page.getTextContent();
   const H = page.view[3];
   const texts = tc.items.filter(it => it.str && it.str.trim()).map(it => ({
-    s: it.str.trim(), x: it.transform[4], y: H - it.transform[5], h: it.height || Math.abs(it.transform[3]), w: it.width || 0, raw: it.str
+    s: it.str.trim(), x: it.transform[4], y: H - it.transform[5], h: it.height || Math.abs(it.transform[3]), w: it.width || 0, raw: it.str, f: it.fontName
   }));
 
   // Горизонтальные линии (струны) и вертикальные (тактовые черты, штили)
@@ -268,12 +328,20 @@ async function parsePage(page, O, pageNo) {
       const m = measures.find(m => t.x >= m.x0 - 25 && t.x < m.x1 - 5) || measures[0];
       if (m && m.tempo == null) m.tempo = +mt[1];
     }
+    // Названия частей над станом (Intro, Verse 1, Chorus…): курсив крупнее подписей, у начала такта
+    for (const t of texts) {
+      if (t.h < 9.5 || t.h > 14 || t.y > top - 3 || t.y < top - 45) continue;
+      if (/=\s*\d|^\d+$|^(full|½|¼|¾|P\.?\s?M\.?|let ring|rake|N\.?H\.?|A\.?H\.?|P\.?H\.?)$/i.test(t.s) || !/[A-Za-zА-Яа-я]{2}/.test(t.s)) continue;
+      const m = measures.find(m => t.x >= m.x0 - 6 && t.x < m.x0 + Math.min(60, (m.x1 - m.x0) * 0.6));
+      if (m) (m.mk = m.mk || []).push({ s: t.s.replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s*\[.*?\]\s*/g, ' ').trim() || t.s, f: t.f });
+    }
     // Размер такта (крупные цифры на стане)
     const big = texts.filter(t => /^\d+$/.test(t.s) && t.h > 15 && t.y > top - 2 && t.y < bot + 30);
     for (let i = 0; i + 1 < big.length; i++) {
       const a = big[i], b = big[i + 1];
-      if (Math.abs(a.x - b.x) < 3 && b.y > a.y) {
-        const m = measures.find(m => a.x >= m.x0 - 3 && a.x < m.x1);
+      const ca = a.x + (a.w || 0) / 2, cb = b.x + (b.w || 0) / 2;
+      if (Math.abs(ca - cb) < 3 && b.y > a.y && b.y - a.y < 30) {
+        const m = measures.find(m => ca >= m.x0 - 3 && ca < m.x1);
         if (m) m.sig = [+a.s, +b.s];
       }
     }
@@ -314,11 +382,19 @@ async function parsePage(page, O, pageNo) {
       if (o.kind !== 'F' || !isGray(o.color) || o.color[0] > 200) continue;
       for (const s of o.subs) {
         const b = s.b, w = b.x1 - b.x0, h = b.y1 - b.y0;
-        if (!s.t.includes('C') || w < 5 || h > 5 || h < 0.5) continue;
+        if (!s.t.includes('C') || w < 5 || h < 0.5) continue;
+        // плоская дуга (концы на одной высоте); высокая кривая со стрелкой — это бенд, не лига
+        if (h > 5 && !(h <= 8 && w > h * 2.5 && s.p.length >= 4 && Math.abs(s.p[0][1] - s.p[3][1]) < 1.5)) continue;
         if (b.y0 < top - sp || b.y1 > bot + sp) continue;
-        arcs.push(b);
+        // прямая косая черта между цифрами — слайд (у лиги точки уходят от прямой на всю высоту дуги)
+        const P = s.p || [], L0 = P.reduce((a, q) => q[0] < a[0] ? q : a, P[0] || [0, 0]), R0 = P.reduce((a, q) => q[0] > a[0] ? q : a, P[0] || [0, 0]);
+        const len = Math.hypot(R0[0] - L0[0], R0[1] - L0[1]) || 1, dev = Math.max(0, ...P.map(q => Math.abs((R0[0] - L0[0]) * (L0[1] - q[1]) - (L0[0] - q[0]) * (R0[1] - L0[1])) / len));
+        arcs.push({ ...b, straight: P.length >= 3 && dev < 1.3 && Math.abs(R0[1] - L0[1]) > 1.2 });
       }
     }
+    // Бенды (стрелки с подписью full / ½), удержание бенда (пунктир), возврат (стрелка вниз),
+    // вибрато (волна над станом), слайды (косая черта у цифры)
+    detectTech(out, texts, notes, { top, bot, sp, ys });
     // Паузы на стане: целая/половинная (брусок), восьмая, шестнадцатая, тридцать вторая, четвертная; точки после паузы
     const rests = findRests(out, { top, bot, sp, ys, sx0, sx1 });
     // глифы, совпавшие с паузой, нотами не считаем
@@ -372,12 +448,31 @@ async function parsePage(page, O, pageNo) {
     const rowYs = cluster(stems.map(s => s.y1), 2.5);
     const voices = rowYs.map(() => []);
     const full = Math.max(1, ...stems.map(s => s.y1 - s.y0));
+    // ударная нотация (головки, а не цифры): короткий штиль там — не половинная. Крестики глухих нот в табах не в счёт
+    const drumish = heads.some(h => h.kind !== 'x' && h.kind !== 'xbig') || (heads.length > 0 && !notes.length);
+    // Форшлаги: короткий штиль, перечёркнутый косой чертой; связанные с ним тонкой балкой — тоже форшлаги
+    const slashes = [];
+    for (const o of out) if (o.kind === 'F' && isGray(o.color)) for (const sb of o.subs) {
+      const b = sb.b, w = b.x1 - b.x0, h = b.y1 - b.y0, t = sb.t.join('');
+      if (/^ML{3,4}Z?$/.test(t) && w > 2.5 && w < 9 && h > 2.5 && h < 9 && Math.abs(w - h) < 3 && b.y0 > bot && b.y0 < bot + 70) slashes.push(b);
+    }
+    const hs = notes.filter(n => !n.paren).map(n => n.b.y1 - n.b.y0).sort((a, b) => a - b), medH = hs.length ? hs[hs.length >> 1] : 0;
+    for (const n of notes) if (medH && !n.paren && n.b.y1 - n.b.y0 < medH * 0.8) { n.small = true; for (const s of stems) if (Math.abs(s.x - n.cx) < 3) s.grace = true; }
+    for (const sl of slashes) for (const s of stems) if (s.x > sl.x0 && s.x < sl.x1 && sl.y0 < s.y1 && sl.y1 > s.y0 && s.y1 - s.y0 < full * 0.8) s.grace = true;
+    for (let more = true; more;) {
+      more = false;
+      for (const g0 of stems.filter(s => s.grace)) for (const b of beams) {
+        if (b.x0 > g0.x + 0.6 || b.x1 < g0.x - 0.6 || b.y > g0.y1 + 0.5 || b.y < g0.y0) continue;
+        for (const s of stems) if (!s.grace && s.x >= b.x0 - 0.6 && s.x <= b.x1 + 0.6 && Math.abs(s.y1 - g0.y1) < 1) { s.grace = true; more = true; }
+      }
+    }
     for (const s of stems) {
       let ri = 0, bd = 1e9; rowYs.forEach((y, i) => { const d = Math.abs(y - s.y1); if (d < bd) { bd = d; ri = i; } });
+      if (s.grace) { const rj = rowYs.reduce((a, y, i) => Math.abs(y - s.y1) > 2.5 && (a < 0 || Math.abs(y - s.y1) < Math.abs(rowYs[a] - s.y1)) ? i : a, -1); voices[rj >= 0 && Math.abs(rowYs[ri] - s.y1) < 1 ? rj : ri].push({ x: s.x, dur: 0, grace: true }); continue; }
       const h = s.y1 - s.y0;
-      const nb = beams.filter(b => b.x0 <= s.x + 0.6 && b.x1 >= s.x - 0.6 && b.y > s.y1 - full * 0.7 && b.y < s.y1 + 1).length;
+      const nb = cluster(beams.filter(b => b.x0 <= s.x + 0.6 && b.x1 >= s.x - 0.6 && b.y > Math.max(s.y0 - 0.5, s.y1 - full * 0.9) && b.y < s.y1 + 1).map(b => b.y), 1).length; // балки на одной высоте (кусок + целая) — одна
       const nf = flags.filter(f => Math.abs(f.b.x0 - s.x) < 1.5 && f.cy > s.y0 - 3 && f.cy < s.y1 + 3).length;
-      let dur = (!heads.length && h < Math.max(full * 0.7, sp * 1.1)) ? 2 : 1;
+      let dur = (!drumish && h < Math.max(full * 0.7, sp * 1.1)) ? 2 : 1;
       const k = Math.max(nb, nf);
       if (k) dur = 1 / Math.pow(2, k);
       let dotted = dots.some(d => d.x0 > s.x + 0.3 && d.x0 < s.x + 5 && d.y1 > s.y1 - 4 && d.y0 < s.y1 + 2);
@@ -389,6 +484,20 @@ async function parsePage(page, O, pageNo) {
       voices[ri].push({ x: s.x, dur });
     }
     voices.forEach(v => v.sort((a, b) => a.x - b.x));
+    // Триоли и другие группы: скобка под штилями с цифрой посередине (3 — две трети, 4 в 12/8 — три четверти…)
+    const TUP = { 2: 3 / 2, 3: 2 / 3, 4: 3 / 4, 5: 4 / 5, 6: 4 / 6, 7: 4 / 7, 9: 8 / 9, 10: 8 / 10, 12: 8 / 12 };
+    const segs = [];
+    for (const o of out) for (const sb of o.subs) { const b = sb.b; if (sb.t.join('') === 'ML' && b.y1 - b.y0 < 0.3 && b.x1 - b.x0 > 3 && b.y0 > bot + 6 && b.y0 < bot + 80) segs.push(b); }
+    const tupDigits = glyphs.filter(g => /^\d$/.test(g.label) && g.gray && g.cy > bot + 6 && g.cy < bot + 80 && g.h < 7);
+    const tuplets = [];
+    for (const d of tupDigits) {
+      const L = segs.filter(b => Math.abs(b.y0 - d.cy) < 2.5 && b.x1 <= d.b.x0 + 0.5 && b.x1 > d.b.x0 - 5).sort((a, b) => b.x1 - a.x1)[0];
+      const R = segs.filter(b => Math.abs(b.y0 - d.cy) < 2.5 && b.x0 >= d.b.x1 - 0.5 && b.x0 < d.b.x1 + 5).sort((a, b) => a.x0 - b.x0)[0];
+      const f = TUP[+d.label]; if (!f || (!L && !R)) continue;
+      tuplets.push({ x0: L ? L.x0 : d.b.x0 - 3, x1: R ? R.x1 : d.b.x1 + 3, f, n: +d.label });
+    }
+    for (const tp of tuplets) for (const v of voices) for (const e of v) if (e.x >= tp.x0 - 1 && e.x <= tp.x1 + 1 && !e.tup) { e.dur *= tp.f; e.tup = tp.n; }
+    for (const tp of tuplets) for (const r of rests) if (r.x >= tp.x0 - 1 && r.x <= tp.x1 + 1 && !r.tup) { r.dur *= tp.f; r.tup = tp.n; }
     // Текстовые обозначения техник над нотами (если они есть в PDF как текст): P.M., let ring, N.H., T, L.H.…
     const marks = [];
     const MK = [[/^P\.?\s?M\.?$/i, 'pm'], [/^(let\s*ring|l\.\s?r\.?)$/i, 'ring'], [/^N\.?\s?H\.?$/, 'harmN'], [/^A\.?\s?H\.?$/, 'harmA'], [/^P\.?\s?H\.?$/, 'harmP'], [/^T\.?\s?H\.?$/, 'harmT'],
@@ -415,7 +524,7 @@ async function parsePage(page, O, pageNo) {
       }
     }
     // маркато рисуется поверх акцента в одной колонке — оставляем более сильное обозначение
-    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, dead, arcs, voices, marks, rests });
+    res.push({ page: pageNo, top, bot, sp, ys, sx0, sx1, measures, tun, notes, heads, dead, arcs, voices, marks, rests, dots });
   }
   return { systems: res, texts };
 }
@@ -469,7 +578,8 @@ const DRUM_MAP = {
   head: { '-2': 35, '-1': 35, 0: 35, 1: 36, 2: 41, 3: 43, 4: 45, 5: 38, 6: 48, 7: 50, 8: 50, 9: 48 },
   x: { '-2': 44, '-1': 44, 0: 44, 1: 44, 3: 42, 5: 37, 6: 42, 7: 53, 8: 51, 9: 42, 10: 49, 11: 57, 12: 55 },
   xbig: { 7: 53, 8: 51, 9: 42, 10: 49, 11: 57, 12: 55, 13: 52 },
-  xcirc: { 8: 53, 9: 46, 10: 49, 11: 57 }
+  xcirc: { 8: 53, 9: 46, 10: 49, 11: 57 },
+  diamond: { 4: 56, 5: 56, 6: 53, 7: 53, 8: 53, 9: 53, 10: 53, 11: 53 }
 };
 export function drumNote(kind, step) {
   const m = DRUM_MAP[kind] || DRUM_MAP.head;
@@ -504,11 +614,31 @@ export function buildSong(systems, meta) {
   // Такты по порядку
   const ms = [];
   let lastN = 0, sig = [4, 4], tempo = 120, firstTempo = null;
-  for (const sy of systems) for (const m of sy.measures) {
+  for (const sy of systems) sy.measures.forEach((m, mi) => {
+    // такт, не поместившийся в строку: начало новой строки без номера, а следующий такт — со следующим номером
+    const nx = sy.measures[mi + 1];
+    if (m.n == null && mi === 0 && ms.length && (!nx || nx.n == null || nx.n === lastN + 1)) {
+      const prev = ms[ms.length - 1];
+      ms.push({ n: lastN, sy, x0: m.x0, x1: m.x1, len: 0, sig: [...prev.sig], tempo: prev.tempo, cont: prev });
+      prev.split = ms[ms.length - 1];
+      return;
+    }
     const n = m.n != null ? m.n : lastN + 1; lastN = n;
     if (m.sig) sig = m.sig;
     if (m.tempo) { tempo = m.tempo; if (firstTempo == null) firstTempo = tempo; }
-    ms.push({ n, sy, x0: m.x0, x1: m.x1, len: sig[0] * 4 / sig[1], sig: [...sig], tempo });
+    ms.push({ n, sy, x0: m.x0, x1: m.x1, len: sig[0] * 4 / sig[1], sig: [...sig], tempo, mk: m.mk });
+  });
+  // шрифт названий частей узнаём по знакомым словам — так подписи текста песни не примешиваются
+  const SEC_RE = /^(intro|verse|chorus|pre-?chorus|bridge|solo|outro|interlude|ending|coda|refrain|break|riff|вступ|куплет|припев|бридж|соло|проигрыш|кода|концовка)/i;
+  const secFonts = new Set(); for (const m of ms) for (const c of m.mk || []) if (SEC_RE.test(c.s)) secFonts.add(c.f);
+  for (const m of ms) { const c = (m.mk || []).find(c => secFonts.has(c.f)); if (c) m.marker = c.s; }
+  // длительность частей перенесённого такта — по ритму (штили и паузы), иначе по ширине
+  const rhythmSum = m => { const inM = x => x >= m.x0 - 0.5 && x < m.x1 - 0.5; let best = 0; for (const v of m.sy.voices) best = Math.max(best, v.filter(e => inM(e.x)).reduce((a, e) => a + e.dur, 0)); return best + (m.sy.rests || []).filter(r => inM(r.x)).reduce((a, r) => a + r.dur, 0); };
+  for (const m of ms) if (m.split) {
+    const full = m.len, b = m.split, sa = rhythmSum(m), sb = rhythmSum(b);
+    let la = sa > 0 && sa < full ? sa : sb > 0 && sb < full ? full - sb : full * (m.x1 - m.x0) / Math.max(1, (m.x1 - m.x0) + (b.x1 - b.x0));
+    la = Math.max(0.25, Math.min(full - 0.25, Math.round(la * 8) / 8));
+    m.len = la; b.len = full - la; m.fullLen = full;
   }
   let beat = 0;
   for (const m of ms) { m.start = beat; beat += m.len; }
@@ -527,9 +657,21 @@ export function buildSong(systems, meta) {
     const sumOf = ev => ev.reduce((a, e) => a + e.dur, 0);
     for (const r of [...mRests].sort((a, b) => b.dur - a.dur || a.x - b.x)) {
       let bi = -1, bd = -1;
-      evs.forEach((ev, i) => { const d = m.len - sumOf(ev); if (d >= r.dur - 0.01 && d > bd + 0.01) { bd = d; bi = i; } });
+      // пауза — в голос, у которого есть ноты и не хватает длительности (пустой голос — в последнюю очередь)
+      evs.forEach((ev, i) => { const d = m.len - sumOf(ev); if (d < r.dur - 0.01) return; const sc = (ev.some(e => !e.rest) ? 1000 : 0) + d; if (sc > bd + 0.01) { bd = sc; bi = i; } });
       if (bi < 0) { m.restMismatch = (m.restMismatch || 0) + 1; continue; }
       evs[bi].push({ x: r.x, dur: r.dur, rest: true });
+    }
+    // цифра без штиля — целая нота (с точкой под ней — целая с точкой)
+    if (!isDrum && evs.length) {
+      const xs = cluster(mNotes.map(n => n.cx), 2.6);
+      for (const x of xs) {
+        if (evs.some(ev => ev.some(e => Math.abs(e.x - x) < 3.2))) continue;
+        const dotted = (sy.dots || []).some(d => Math.abs((d.x0 + d.x1) / 2 - x) < 6);
+        const dur = dotted ? 6 : 4;
+        let bi = -1; evs.forEach((ev, i) => { if (bi < 0 && m.len - sumOf(ev) >= dur - 0.01) bi = i; });
+        if (bi >= 0) evs[bi].push({ x, dur });
+      }
     }
     const vts = evs.map(ev => {
       ev.sort((a, b) => a.x - b.x);
@@ -540,8 +682,17 @@ export function buildSong(systems, meta) {
       if (sum > m.len + 0.01) { const k = m.len / sum; ev.forEach(e => e.dur *= k); m.squeezed = true; }
       else if (deficit > 0.01 && ev.some(e => !e.rest)) m.short = true;
       for (const e of ev) { e.t = t; t += e.dur; }
+      for (const e of ev) if (!e.rest && !e.grace) (sy.ev = sy.ev || []).push({ x: e.x, t0: m.start + e.t, dur: e.dur });
       return ev.filter(e => !e.rest);
     });
+    // форшлаг — короткая нота (1/32) прямо перед следующей нотой (в любом голосе)
+    {
+      const mains = vts.flat().filter(e => !e.grace).sort((a, b) => a.x - b.x), gr = vts.flat().filter(e => e.grace);
+      for (const g of gr) {
+        const nx = mains.find(e => e.x > g.x + 1), k = gr.filter(o => o.x >= g.x - 0.1 && (!nx || o.x < nx.x)).length;
+        g.dur = 0.125; g.t = Math.max(0, (nx ? nx.t : m.len) - 0.125 * k);
+      }
+    }
     // Колонки (ноты с одинаковым x)
     const cols = cluster(mNotes.map(n => n.cx), 2.6).map(x => ({ x }));
     for (const c of cols) {
@@ -609,22 +760,74 @@ export function buildSong(systems, meta) {
     const a = cand[0];
     const after = notes.filter(n => n.sy === sy && n.x > arc.x1 - 3 && n.x < arc.x1 + 4);
     const tgt = after.find(n => n.midi === a.midi) || after[0];
-    if (tgt) {
-      if (tgt.midi === a.midi && !tgt.tie) tgt.tie = true;
+    if (tgt && tgt.midi !== a.midi && tgt.string === a.string && arc.straight) {
+      // косая черта к другой ноте на той же струне — слайд
+      a.x2 = a.x2 || {}; a.x2.sl = 'legato'; a.x2.slTo = tgt.fret;
+      a.dur = Math.max(a.dur, tgt.start - a.start);
+    } else if (tgt && tgt.midi !== a.midi && tgt.string === a.string) {
+      // дуга к другой ноте на той же струне — хаммер-он / пулл-офф
+      a.x2 = a.x2 || {}; a.x2.hp = tgt.midi > a.midi ? 'h' : 'p';
+    } else if (tgt && tgt.midi === a.midi) {
+      if (!tgt.tie) tgt.tie = true;
       a.dur = Math.max(a.dur, tgt.start + tgt.dur - a.start);
     } else {
+      // лига к штилю без цифры — нота тянется до конца этого штиля (продолжение звучит, цифру не пишут)
+      const e = (sy.ev || []).filter(e => Math.abs(e.x - arc.x1) < 7 && e.t0 > a.start + 1e-6).sort((p, q) => Math.abs(p.x - arc.x1) - Math.abs(q.x - arc.x1))[0];
       const m = ms.find(m => m.sy === sy && arc.x1 >= m.x0 && arc.x1 <= m.x1 + 2);
-      if (m && arc.x1 >= m.x1 - 3) a.dur = Math.max(a.dur, m.start + m.len - a.start);
+      if (e) a.dur = Math.max(a.dur, e.t0 + e.dur - a.start);
+      else if (m && arc.x1 >= m.x1 - 3) a.dur = Math.max(a.dur, m.start + m.len - a.start);
     }
   }
-  // Ноты в скобках и связанные — продолжение предыдущей ноты той же высоты
+  // Техники из графики: вибрато, слайды, бенды (подтяжка, удержание, возврат)
+  if (!isDrum) {
+    const held = new Map(); // струна → { amt, until: {sy, x} }
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i], s = n.src || {};
+      const X = () => (n.x2 = n.x2 || {});
+      if (s.vib) X().vib = s.vib;
+      if (s.slide) {
+        const nx = notes.slice(i + 1).find(q => q.string === n.string && q.sy === n.sy && q.start > n.start + 1e-6);
+        if (nx && nx.x - n.x < 70 && nx.fret !== n.fret) { X().sl = 'shift'; n.x2.slTo = nx.fret; }
+        else X().sl = s.slide === 'down' ? 'down' : 'up';
+      }
+      if (s.slideIn) X().slIn = s.slideIn;
+      const h = held.get(n.string);
+      const inHold = h && h.sy === n.sy && n.x <= h.x + 2 && n.start > h.start;
+      const D = n.dur, q = Math.min(D * 0.35, 0.25);
+      let curve = null, amt = 0;
+      if (s.pre && s.rel) { amt = s.pre; curve = [[0, amt], [Math.min(D * 0.2, 0.12), amt], [Math.min(D * 0.55, 0.4), 0], [D, 0]]; }
+      else if (s.pre) { amt = s.pre; curve = [[0, amt], [D, amt]]; }
+      else if (s.bend) { amt = s.bend; curve = [[0, 0], [q, amt], [D, amt]]; }
+      else if (s.rel) { amt = typeof s.rel === 'number' ? s.rel : (h ? h.amt : 2); curve = [[0, amt], [q, 0], [D, 0]]; }
+      else if (inHold) { amt = h.amt; curve = [[0, amt], [D, amt]]; }
+      if (curve) n.curve = curve.map(([o, v]) => [n.start + o, v]);
+      if (s.holdTo && (s.bend || s.pre)) held.set(n.string, { amt: s.bend || s.pre, sy: n.sy, x: s.holdTo, start: n.start });
+      else if (s.rel || (h && !inHold)) held.delete(n.string);
+    }
+  }
+  // Ноты в скобках и связанные — продолжение предыдущей ноты той же высоты (кривая бенда склеивается)
   const outNotes = [];
   for (const n of notes) {
     if (n.tie) {
       const prev = [...outNotes].reverse().find(p => p.midi === n.midi && p.start < n.start - 1e-6 && p.start + p.dur >= n.start - 0.6);
-      if (prev) { prev.dur = Math.max(prev.dur, n.start + n.dur - prev.start); continue; }
+      if (prev) {
+        if (prev.curve || n.curve) {
+          const pc = prev.curve || [[prev.start, 0], [prev.start + prev.dur, 0]];
+          const lastV = pc[pc.length - 1][1];
+          const nc = n.curve || [[n.start, lastV], [n.start + n.dur, lastV]];
+          prev.curve = pc.filter(p => p[0] < n.start - 1e-6).concat(nc);
+        }
+        if (n.x2 && n.x2.vib) { prev.x2 = prev.x2 || {}; prev.x2.vib = n.x2.vib; }
+        prev.dur = Math.max(prev.dur, n.start + n.dur - prev.start); continue;
+      }
     }
     outNotes.push(n);
+  }
+  for (const n of outNotes) if (n.curve && n.curve.some(p => p[1] > 0)) {
+    const D = Math.max(1e-3, n.dur), pts = n.curve.map(([t, v]) => [Math.max(0, Math.min(60, Math.round((t - n.start) / D * 60))), v]);
+    const max = Math.max(...pts.map(p => p[1])), first = pts[0][1], last = pts[pts.length - 1][1];
+    const type = first > 0 && last === 0 ? (first === max ? 'prebendRelease' : 'release') : first > 0 ? 'prebend' : last === 0 ? 'bendRelease' : 'bend';
+    n.x2 = n.x2 || {}; n.x2.bend = { type, max, pts };
   }
   // ударные: головки в положении, которому нет элемента установки, не озвучиваем — показываем для проверки
   const unknown = isDrum ? outNotes.filter(n => n.midi == null).map(n => ({ start: +n.start.toFixed(4), measure: n.measure, page: n.sy.page, head: n.src.head, step: n.src.step, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)) })) : [];
@@ -634,7 +837,7 @@ export function buildSong(systems, meta) {
   return {
     pv: PARSER_VERSION, title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
-    measures: ms.map(m => ({ n: m.n, start: m.start, len: m.len, tempo: m.tempo, sig: m.sig, ...(m.squeezed || m.short || m.restMismatch ? { rhythmCheck: true } : {}) })),
+    measures: ms.filter(m => !m.cont).map(m => ({ n: m.n, start: m.start, len: m.fullLen || m.len, tempo: m.tempo, sig: m.sig, ...(m.marker ? { marker: m.marker } : {}), ...(m.squeezed || m.short || m.restMismatch ? { rhythmCheck: true } : {}) })),
     totalBeats: total, notes: clean, unknown
   };
 }

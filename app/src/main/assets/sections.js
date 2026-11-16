@@ -39,8 +39,15 @@ export function detectSections(song, markers) {
   if (markers && markers.length) {
     const out = [];
     const mk = markers.slice().sort((a, b) => a.idx - b.idx);
-    if (mk[0].idx > 0) mk.unshift({ idx: 0, text: 'Вступление' });
-    mk.forEach((m, i) => { const b = (mk[i + 1] ? mk[i + 1].idx : M) - 1; if (b >= m.idx) out.push({ a: m.idx, b, kind: guessKind(m.text), name: m.text.trim() || SEC_KINDS[guessKind(m.text)].name, fromFile: true }); });
+    if (mk[0].idx <= 1) mk[0] = { ...mk[0], idx: 0 }; // затакт — часть первой части
+    else mk.unshift({ idx: 0, text: 'Intro' });
+    mk.forEach((m, i) => {
+      const b = (mk[i + 1] ? mk[i + 1].idx : M) - 1; if (b < m.idx) return;
+      const kind = guessKind(m.text), num = (/\b(\d+)\b/.exec(m.text) || [])[1];
+      // название по-русски (Verse 2 → Куплет 2); незнакомое — как в файле
+      const name = kind === 'part' ? m.text.trim() : num ? SEC_KINDS[kind].name + ' ' + num : undefined;
+      out.push({ a: m.idx, b, kind, name, fromFile: true });
+    });
     return finish(out);
   }
   // --- отпечатки тактов ---
@@ -159,9 +166,9 @@ export function detectSections(song, markers) {
 
 function finish(list) {
   const cnt = {}, tot = {};
-  for (const s of list) tot[s.kind] = (tot[s.kind] || 0) + 1;
+  for (const s of list) if (!s.name) tot[s.kind] = (tot[s.kind] || 0) + 1;
   for (const s of list) {
-    cnt[s.kind] = (cnt[s.kind] || 0) + 1;
+    if (!s.name) cnt[s.kind] = (cnt[s.kind] || 0) + 1;
     const base = s.name || SEC_KINDS[s.kind].name;
     if (!s.name) s.name = tot[s.kind] > 1 && s.kind !== 'rest' ? base + ' ' + cnt[s.kind] : base;
     s.col = (SEC_KINDS[s.kind] || SEC_KINDS.part).col;

@@ -37,6 +37,31 @@ export function kindFromInstrumentText(s) {
   if (/bright/.test(n) && /piano/.test(n)) return { kind: 'piano', program: 1 };
   if (/electric piano|rhodes/.test(n)) return { kind: 'piano', program: 4 };
   if (/piano|keys|keyboard/.test(n)) return { kind: 'piano', program: 0 };
+  // духовые, оркестр, голос (Songsterr часто подписывает партию вокала саксофоном — звучит саксофон)
+  if (/soprano sax/.test(n)) return { kind: 'other', program: 64 };
+  if (/tenor sax/.test(n)) return { kind: 'other', program: 66 };
+  if (/bari(tone)? sax/.test(n)) return { kind: 'other', program: 67 };
+  if (/sax/.test(n)) return { kind: 'other', program: 65 };
+  if (/trumpet/.test(n)) return { kind: 'other', program: 56 };
+  if (/trombone/.test(n)) return { kind: 'other', program: 57 };
+  if (/tuba/.test(n)) return { kind: 'other', program: 58 };
+  if (/french horn|horn/.test(n)) return { kind: 'other', program: 60 };
+  if (/brass/.test(n)) return { kind: 'other', program: 61 };
+  if (/piccolo/.test(n)) return { kind: 'other', program: 72 };
+  if (/flute/.test(n)) return { kind: 'other', program: 73 };
+  if (/clarinet/.test(n)) return { kind: 'other', program: 71 };
+  if (/oboe/.test(n)) return { kind: 'other', program: 68 };
+  if (/bassoon/.test(n)) return { kind: 'other', program: 70 };
+  if (/harmonica/.test(n)) return { kind: 'other', program: 22 };
+  if (/accordion|bayan|баян|аккордеон/.test(n)) return { kind: 'other', program: 21 };
+  if (/violin|fiddle|скрипк/.test(n)) return { kind: 'other', program: 40 };
+  if (/viola|альт/.test(n)) return { kind: 'other', program: 41 };
+  if (/cello|виолончел/.test(n)) return { kind: 'other', program: 42 };
+  if (/harp|арф/.test(n)) return { kind: 'other', program: 46 };
+  if (/synth ?strings/.test(n)) return { kind: 'other', program: 50 };
+  if (/string ensemble 2|slow strings/.test(n)) return { kind: 'other', program: 49 };
+  if (/pizzicato/.test(n)) return { kind: 'other', program: 45 };
+  if (/choir|aahs|vocal|voice|вокал|голос|хор/.test(n)) return { kind: 'other', program: 52 };
   if (/string/.test(n)) return { kind: 'other', program: 48 };
   if (/organ/.test(n)) return { kind: 'other', program: 16 };
   if (/synth|pad/.test(n)) return { kind: 'other', program: 89 };
@@ -187,7 +212,7 @@ export function songSummary(song) {
 // Конвертация старого формата (PDF, доли) в модель v2
 export function fromBeatSong(old) {
   const B = b => Math.round(b * PPQ);
-  const measures = old.measures.map(m => ({ n: m.n, tick: B(m.start), len: B(m.len), sig: m.sig || [4, 4] }));
+  const measures = old.measures.map(m => ({ n: m.n, tick: B(m.start), len: B(m.len), sig: m.sig || [4, 4], ...(m.marker ? { marker: m.marker } : {}) }));
   const tempos = []; let last = null;
   for (const m of old.measures) { const bpm = m.tempo || 120; if (bpm !== last) { tempos.push({ tick: B(m.start), bpm }); last = bpm; } }
   const inst = kindFromInstrumentText(old.instrument || old.track);

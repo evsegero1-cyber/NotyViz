@@ -187,9 +187,21 @@ export function realize(n, ctx) {
   // подтяжки для струнных: бенд, вибрато, слайд → кривая высоты
   if (ctx.bends && (x.bend || x.vib || (x.sl && x.slTo != null && ctx.kind !== 'piano'))) {
     const B = ctx.bends;
-    if (x.bend && x.bend.pts) for (const [o, semi] of x.bend.pts) B.push([Math.round(t + d * o / 60), semi]);
-    if (x.vib) { const amp = x.vib === 'wide' ? 0.5 : 0.25, step = P / 8; for (let tt = t, k = 0; tt < t + d; tt += step, k++) B.push([Math.round(tt), (k % 2 ? amp : -amp) * 0.5]); }
-    if (x.sl && x.slTo != null && n.f != null) { const diff = x.slTo - n.f; for (let k = 0; k <= 6; k++) B.push([Math.round(t + d * (0.5 + k / 12)), diff * k / 6]); }
+    const slDiff = x.sl && x.slTo != null && n.f != null ? x.slTo - n.f : 0;
+    // высота в доле ноты o ∈ [0, 60]: подтяжка + слайд (вибрато качает вокруг неё, а не вокруг нуля)
+    const base = o => {
+      let v = 0;
+      if (x.bend && x.bend.pts && x.bend.pts.length) { const pts = x.bend.pts; if (o <= pts[0][0]) v = pts[0][1]; else { v = pts[pts.length - 1][1]; for (let k = 1; k < pts.length; k++) if (o <= pts[k][0]) { const [a0, va] = pts[k - 1], [a1, vb] = pts[k]; v = va + (vb - va) * (a1 > a0 ? (o - a0) / (a1 - a0) : 1); break; } } }
+      if (slDiff) { const f = Math.max(0, Math.min(1, (o / 60 - 0.5) * 2)); v += slDiff * Math.round(f * 6) / 6; }
+      return v;
+    };
+    if (x.vib) {
+      const amp = (x.vib === 'wide' ? 0.5 : 0.25) * 0.5, step = P / 16;
+      for (let tt = t, k = 0; tt < t + d; tt += step, k++) B.push([Math.round(tt), base((tt - t) / d * 60) + amp * Math.sin(k * Math.PI / 2)]);
+    } else {
+      if (x.bend && x.bend.pts) for (const [o, semi] of x.bend.pts) B.push([Math.round(t + d * o / 60), semi]);
+      if (slDiff) for (let k = 0; k <= 6; k++) B.push([Math.round(t + d * (0.5 + k / 12)), slDiff * k / 6]);
+    }
     B.push([t + d, 0]);
   }
   return out;
