@@ -214,7 +214,12 @@ export function fromBeatSong(old) {
   const B = b => Math.round(b * PPQ);
   const measures = old.measures.map(m => ({ n: m.n, tick: B(m.start), len: B(m.len), sig: m.sig || [4, 4], ...(m.marker ? { marker: m.marker } : {}) }));
   const tempos = []; let last = null;
-  for (const m of old.measures) { const bpm = m.tempo || 120; if (bpm !== last) { tempos.push({ tick: B(m.start), bpm }); last = bpm; } }
+  let rampUntil = -1;
+  for (const m of old.measures) {
+    if (m.tempoPts) { for (const [b, bpm] of m.tempoPts) if (bpm !== last) { tempos.push({ tick: B(b), bpm }); last = bpm; } rampUntil = m.tempoPts[m.tempoPts.length - 1][0] + 1; continue; }
+    if (m.start < rampUntil - 1e-6) continue; // внутри accel./rit.
+    const bpm = m.tempo || 120; if (bpm !== last) { tempos.push({ tick: B(m.start), bpm }); last = bpm; }
+  }
   const inst = kindFromInstrumentText(old.instrument || old.track);
   const drum = old.isDrum || inst.kind === 'drums';
   const notes = old.notes.map(n => ({ t: B(n.start), d: Math.max(1, B(n.dur)), m: n.midi, v: 96, s: drum ? undefined : n.string, f: drum ? undefined : n.fret, bar: n.measure, page: n.page, box: n.box, voice: n.voice,

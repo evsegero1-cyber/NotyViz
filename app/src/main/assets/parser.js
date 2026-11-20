@@ -5,7 +5,7 @@ import TEMPLATES from './templates.js';
 
 const GW = 8, GH = 11;
 // Версия разбора: при её смене сохранённые PDF Songsterr разбираются заново (2 — паузы, глухие ноты, штили ударных)
-export const PARSER_VERSION = 4; // 3 — форшлаги, бенды, части; 4 — слова песни
+export const PARSER_VERSION = 5; // 5 — темп: accel./rit., единица темпа, отметки выше подписей // 3 — форшлаги, бенды, части; 4 — слова песни
 
 function mul(m, n) {
   return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
@@ -281,6 +281,23 @@ function detectTech(out, texts, notes, st) {
   for (const v of vibs) for (const q of notes) if (q.cx >= v.x0 - 4 && q.cx <= v.x1 + 2) q.vib = v.wide ? 'wide' : 'slight';
 }
 
+// Единица темпа по знаку ноты слева от «=» (в долях четверти)
+function tempoUnit(out, x, y) {
+  const sub = [];
+  for (const o of out) if (o.kind === 'F') for (const s of o.subs) { const b = s.b; if (b.x1 < x + 0.5 && b.x0 > x - 18 && b.y0 > y - 17 && b.y1 < y + 5) sub.push(s); }
+  if (!sub.length) return 1;
+  const main = sub.reduce((a, c) => ((c.b.x1 - c.b.x0) * (c.b.y1 - c.b.y0) > (a.b.x1 - a.b.x0) * (a.b.y1 - a.b.y0) ? c : a));
+  const hb = main.b;
+  // половинная: внутри головки отверстие (отдельный контур внутри)
+  const hole = sub.some(s => s !== main && s.b.x0 >= hb.x0 - 0.1 && s.b.x1 <= hb.x1 + 0.1 && s.b.y0 >= hb.y0 - 0.1 && s.b.y1 <= hb.y1 + 0.1 && (s.b.x1 - s.b.x0) > 1 && (s.b.y1 - s.b.y0) > 0.8);
+  // точка: маленький круглый контур правее головки
+  const dot = sub.some(s => s !== main && s.b.x0 > hb.x1 - 2 && (s.b.x1 - s.b.x0) < 1.6 && (s.b.y1 - s.b.y0) < 1.6 && s.t.includes('C'));
+  // флажок восьмой: у самой фигуры правая часть выше головки шире штиля
+  const flag = (hb.x1 - hb.x0) > 6.5 && (hb.y1 - hb.y0) > 10;
+  let u = hole ? 2 : flag ? 0.5 : 1;
+  if (dot) u *= 1.5;
+  return u;
+}
 async function parsePage(page, O, pageNo) {
   const out = await walkPage(page, O);
   const tc = await page.getTextContent();
@@ -342,12 +359,20 @@ async function parsePage(page, O, pageNo) {
       const m = measures.find(m => t.x >= m.x0 - 3 && t.x < m.x1 - 3);
       if (m && m.n == null) m.n = +t.s;
     }
-    // Темп
+    // Темп: «♩ = 131» над станом. Знак относится к ближайшему стану ниже (над ним бывают ещё
+    // подписи частей, «Choke», «let ring» — поэтому по высоте не ограничиваем жёстко).
+    // Нота перед «=» задаёт единицу: половинная — ×2, с точкой — ×1,5, восьмая — ×0,5.
+    const tops = staves.map(g => g[0].y);
     for (const t of texts) {
       const mt = /=\s*(\d{2,3})/.exec(t.s);
-      if (!mt || t.y > top || t.y < top - 30) continue;
+      if (!mt || t.y > top + 1 || t.y < top - 90) continue;
+      if (tops.some(y => y < top - 1 && y > t.y)) continue; // ближе есть другой стан
       const m = measures.find(m => t.x >= m.x0 - 25 && t.x < m.x1 - 5) || measures[0];
-      if (m && m.tempo == null) m.tempo = +mt[1];
+      if (!m || m.tempo != null) continue;
+      m.tempo = Math.round(+mt[1] * tempoUnit(out, t.x, t.y) * 100) / 100;
+      // «accel.» / «rit.» на той же строке справа: плавное изменение до следующего темпа
+      const ch = texts.find(u => u !== t && Math.abs(u.y - t.y) < 3 && u.x > t.x && u.x < t.x + 90 && /^(accel|rit|rall)/i.test(u.s));
+      if (ch) m.tempoRamp = /^accel/i.test(ch.s) ? 'accel' : 'rit';
     }
     // Названия частей над станом (Intro, Verse 1, Chorus…): курсив крупнее подписей, у начала такта
     for (const t of texts) {
@@ -673,7 +698,7 @@ export function buildSong(systems, meta) {
     const n = m.n != null ? m.n : lastN + 1; lastN = n;
     if (m.sig) sig = m.sig;
     if (m.tempo) { tempo = m.tempo; if (firstTempo == null) firstTempo = tempo; }
-    ms.push({ n, sy, x0: m.x0, x1: m.x1, len: sig[0] * 4 / sig[1], sig: [...sig], tempo, mk: m.mk });
+    ms.push({ n, sy, x0: m.x0, x1: m.x1, len: sig[0] * 4 / sig[1], sig: [...sig], tempo, mk: m.mk, tempoSet: !!m.tempo, tempoRamp: m.tempoRamp });
   });
   // шрифт названий частей узнаём по знакомым словам — так подписи текста песни не примешиваются
   const SEC_RE = /^(intro|verse|chorus|pre-?chorus|bridge|solo|outro|interlude|ending|coda|refrain|break|riff|вступ|куплет|припев|бридж|соло|проигрыш|кода|концовка)/i;
@@ -690,6 +715,17 @@ export function buildSong(systems, meta) {
   let beat = 0;
   for (const m of ms) { m.start = beat; beat += m.len; }
   const total = beat;
+  // accel. / rit.: темп меняется по долям от отметки до следующей отметки темпа
+  ms.forEach((m, i) => {
+    if (!m.tempoRamp) return;
+    const j = ms.findIndex((q, k) => k > i && q.tempoSet && !q.cont);
+    if (j < 0) return;
+    const a = m.tempo, z = ms[j].tempo, span = ms[j].start - m.start;
+    if (span <= 0 || (m.tempoRamp === 'accel') !== (z > a)) return;
+    const pts = [];
+    for (let b = 0; b < span; b += 1) pts.push([+(m.start + b).toFixed(4), Math.round((a + (z - a) * b / span) * 10) / 10]);
+    m.tempoPts = pts;
+  });
 
   const notes = [];
   for (const m of ms) {
@@ -904,7 +940,7 @@ export function buildSong(systems, meta) {
   return {
     pv: PARSER_VERSION, title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
-    measures: ms.filter(m => !m.cont).map(m => ({ n: m.n, start: m.start, len: m.fullLen || m.len, tempo: m.tempo, sig: m.sig, ...(m.marker ? { marker: m.marker } : {}), ...(m.squeezed || m.short || m.restMismatch ? { rhythmCheck: true } : {}) })),
+    measures: ms.filter(m => !m.cont).map(m => ({ n: m.n, start: m.start, len: m.fullLen || m.len, tempo: m.tempo, sig: m.sig, ...(m.tempoPts ? { tempoPts: m.tempoPts } : {}), ...(m.marker ? { marker: m.marker } : {}), ...(m.squeezed || m.short || m.restMismatch ? { rhythmCheck: true } : {}) })),
     totalBeats: total, notes: clean, unknown, ...(lyrics.length ? { lyrics } : {})
   };
 }
