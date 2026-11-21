@@ -303,10 +303,15 @@ body.land .lyrl.off{background:none}
 body .lyr.none,body.land .lyrl.none{display:none!important}
 
 #speedSheet,#guideSheet{z-index:12}
-#guitarBar:not([hidden]){display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;background:var(--bg2)}
-#guitarBar>div{min-width:0}#guitarBar b,#guitarBar small{display:block;font-size:13px;overflow-wrap:anywhere}#guitarBar small{color:var(--mut)}
-#guitarBar #fretPart{max-width:48%}
-#fretPart{align-self:center;max-width:95%;margin:3px 8px;padding:6px 12px}
-#fretPart[hidden]{display:none}
+#guitarBar:not([hidden]){display:flex;flex:none;align-items:center;gap:6px;padding:3px 8px;background:var(--bg2)}
+#fretPart{display:flex;flex:1;min-width:0;gap:6px;overflow-x:auto;scrollbar-width:none}
+#fretPart::-webkit-scrollbar{display:none}
+#fretPart button,#guitarLights{flex:none;height:36px}
+#fretPart button{max-width:10em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#fretPart button[aria-pressed="true"],#guitarLights[aria-pressed="true"]{border-color:var(--acc);color:#9cc5ff;background:rgba(76,154,255,.18)}
+#fretPart button.sounding{background:var(--ok);color:#071910}
+#fretPart button.sounding:not([aria-pressed="true"]){border-color:var(--ok)}
+#guitarLights{width:40px;padding:0;font-size:18px}
+#guitarBend{flex:none;color:var(--mut);font-size:12px;white-space:nowrap}
 
 #guideChoices{max-height:38vh;overflow:auto}#guideChoices button{flex:none}

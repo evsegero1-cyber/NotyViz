@@ -378,28 +378,45 @@ function updateSub() {
   else if (tracks.length === 1 && gt && gt.tuning) txt += ' · ' + describeTuning(gt.tuning, gt.kind).name;
   $('pSub').textContent = txt;
   const picker = $('fretPart');
-  picker.replaceChildren();
-  if (P.mode === 'fret' || P.mode === 'road') {
-    tracks.forEach((tr, i) => {
-      if (hasFrets(tr)) picker.add(new Option('🎸 ' + (tr.name || 'Партия ' + (i + 1)), i));
-    });
-    picker.value = String(P.gTrack);
+  const parts = (P.mode === 'fret' || P.mode === 'road')
+    ? tracks.map((tr, i) => ({ tr, i })).filter(({ tr }) => hasFrets(tr))
+    : [];
+  if (parts.length !== picker.children.length || parts.some(({ tr, i }, j) => {
+    const button = picker.children[j];
+    return button.dataset.part !== String(i) || button.title !== tr.name;
+  })) {
+    picker.replaceChildren(...parts.map(({ tr, i }) => {
+      const button = document.createElement('button');
+      button.className = 'chip';
+      button.dataset.part = i;
+      button.title = tr.name;
+      button.setAttribute('aria-label', tr.name);
+      button.textContent = tr.name.split('|')[0].trim() || tr.name;
+      button.onclick = () => selectFretTrack(i);
+      return button;
+    }));
   }
-  $('guitarBar').hidden = !picker.length;
-  picker.hidden = picker.length < 2;
-  $('guitarName').textContent = picker.length ? 'Партия: ' + (gt?.name || 'Гитара') : '';
+  for (const button of picker.children) {
+    button.setAttribute('aria-pressed', Number(button.dataset.part) === P.gTrack);
+  }
+  $('guitarBar').hidden = !parts.length;
   updateGuitarSound();
 }
 
 function hasFrets(tr) {
   return guitarPart(tr);
 }
+const guitarLights = $('guitarLights');
+guitarLights.onclick = () => {
+  guitarLights.setAttribute('aria-pressed', guitarLights.getAttribute('aria-pressed') !== 'true');
+  updateGuitarSound();
+};
 function updateGuitarSound() {
   if ($('guitarBar').hidden) return;
-  const names = [];
-  if (engine.playing) for (const opt of $('fretPart').options) {
-    const i = Number(opt.value);
-    if (!P.mute[i] && engine.audio.trackLevel(i) > 0.0008) names.push(P.song.tracks[i].name);
+  const highlight = engine.playing && guitarLights.getAttribute('aria-pressed') === 'true';
+  for (const button of $('fretPart').children) {
+    const i = Number(button.dataset.part);
+    button.classList.toggle('sounding', highlight && !P.mute[i] && engine.audio.trackLevel(i) > 0.0008);
   }
   let bendFeedback = '';
   const pitch = train?.pitch;
@@ -409,19 +426,19 @@ function updateGuitarSound() {
       const q = P.fretNotes[i];
       if (q.e <= t || !(q.x?.bend?.max > 0)) continue;
       const cents = Math.round((pitch - q.m - q.x.bend.max) * 100);
-      bendFeedback = ' · Цель бенда: ' + (Math.abs(cents) <= 8 ? 'точно' : (cents > 0 ? '+' : '') + cents + ' ц.');
+      bendFeedback = Math.abs(cents) <= 8 ? '✓' : (cents > 0 ? '+' : '') + cents + ' ц.';
       break;
     }
   }
-  const label = (engine.playing ? (names.length ? 'Звучит: ' + names.join(' + ') : 'Гитары молчат') : 'Пауза') + bendFeedback;
-  if ($('guitarSound').textContent !== label) $('guitarSound').textContent = label;
+  const bend = $('guitarBend');
+  bend.hidden = !bendFeedback;
+  if (bend.textContent !== bendFeedback) bend.textContent = bendFeedback;
 }
 function selectFretTrack(i) {
   P.gTrack = i;
   saveSet(); prepare(); updateSub();
   if (train) train.rebuild();
 }
-$('fretPart').onchange = e => selectFretTrack(Number(e.target.value));
 
 // ---------- Режимы ----------
 function setMode(mode, silent) {

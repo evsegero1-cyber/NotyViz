@@ -64,7 +64,11 @@
     <div id="lyrL" class="lyr lyrl"></div>
     <div id="hud" class="hud"></div>
   </div>
-  <div id="guitarBar" hidden><div><b id="guitarName"></b><small id="guitarSound"></small></div><select id="fretPart" aria-label="Выбрать гитару"></select></div>
+  <div id="guitarBar" hidden>
+    <div id="fretPart" role="group" aria-label="Выбор гитары"></div>
+    <output id="guitarBend" aria-label="Точность бенда" hidden></output>
+    <button id="guitarLights" class="chip" type="button" aria-pressed="false" aria-label="Подсвечивать звучащие гитары" title="Подсветка звучащих гитар">◉</button>
+  </div>
   <div class="ctrl">
     <div id="lyrP" class="lyr"></div>
     <div id="secBar" class="secbar"></div>
