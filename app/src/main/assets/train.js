@@ -332,6 +332,7 @@ export function initTrain(d) {
     riffSection(sc) { if (RF.on) rfStop(); setAB(P.song.measures[sc.a].n, P.song.measures[sc.b].n, sc.a); rfFill(); $('riffSheet').classList.add('on'); },
     onSong() { RF.on = false; engine.audio.setCountIn(0); st.last = null; st.recBuf = null; $('prLast').style.display = 'none'; rebuild(); if (T.mic) micOn(); },
     onLeave() { if (st.rec) recStop(); micOff(); },
+    get pitch() { return mic?.on && mic.pitch && performance.now() - mic.pitch.at < 180 ? mic.pitch.midi : null; },
     get waiting() { return st.pending; }
   };
 }

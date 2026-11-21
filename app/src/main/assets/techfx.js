@@ -1,5 +1,6 @@
 // Общая «анимация техник» для всех видов: где сейчас струна при бенде и слайде,
 // значки-подсказки (бенд, слайд, h/p, вибрато, P.M., флажолет…) и плашка «что сейчас будет».
+import { guideLabel } from './performance-guide.js';
 import { TECH, techIds, bendText } from './techniques.js';
 
 const clamp01 = v => Math.max(0, Math.min(1, v));
@@ -30,6 +31,9 @@ export function trillFret(q, t) { const x = q.x; if (!x || x.tr == null || x.tri
 // короткая подпись техники для значка над нотой
 export function techMark(x, f) {
   if (!x) return '';
+  const guide = guideLabel(x);
+  if (guide) return guide;
+  if (x.stroke) return x.stroke === 'up' ? '↑' : '↓';
   if (x.bend) return '';           // бенд рисуется стрелкой
   if (x.hp) return x.hp === 'h' ? 'H' : 'P';
   if (x.harm) return x.harm === 'N' ? 'NH' : x.harm + 'H';
@@ -95,6 +99,7 @@ export function techCaption(notes, t, firstIdx, kind) {
   let name = short(id);
   if (x.bend && (id === 'bend' || id === 'release')) name += ' ' + (bendText(x.bend.max).trim() === 'full' ? 'на тон' : bendText(x.bend.max).trim() === '½' ? 'на полтона' : bendText(x.bend.max).trim());
   if (x.sl && x.slTo != null && best.q.f != null) name += ` ${best.q.f} → ${x.slTo}`;
+  if (x.detail) name += ' · ' + x.detail;
   if (best.ids.length > 1) name += ' · ' + best.ids.slice(1, 3).map(short).join(' · ');
   return { id, name, on: best.on, inSec: best.q.s - t };
 }

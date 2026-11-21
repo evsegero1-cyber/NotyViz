@@ -302,6 +302,11 @@ body.land .lyrl{display:block!important;position:absolute;left:8px;top:52px;z-in
 body.land .lyrl.off{background:none}
 body .lyr.none,body.land .lyrl.none{display:none!important}
 
-#speedSheet{z-index:12}
+#speedSheet,#guideSheet{z-index:12}
+#guitarBar:not([hidden]){display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;background:var(--bg2)}
+#guitarBar>div{min-width:0}#guitarBar b,#guitarBar small{display:block;font-size:13px;overflow-wrap:anywhere}#guitarBar small{color:var(--mut)}
+#guitarBar #fretPart{max-width:48%}
 #fretPart{align-self:center;max-width:95%;margin:3px 8px;padding:6px 12px}
 #fretPart[hidden]{display:none}
+
+#guideChoices{max-height:38vh;overflow:auto}#guideChoices button{flex:none}

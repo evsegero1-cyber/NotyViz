@@ -6,6 +6,7 @@ import { importMidi } from './import-midi.js';
 import { importScore } from './import-gp.js';
 import { makeTime, fromBeatSong, songSummary, assignChannels, KIND_LABEL, isStringKind, PPQ, GM_NAMES, GM_GROUPS } from './model.js';
 import { perform, TECH, techIds } from './techniques.js';
+import { GUIDE, guitarPart, guideFamily, inferGuitarGuides } from './performance-guide.js';
 import { Engine } from './engine.js';
 import { TIMBRES, TIMBRE, timbreFor, defaultTimbre, GROUP_LABEL, FX_PRESETS, FX_FOR_GROUP, GM_DRUMS } from './audio.js';
 import { PianoView, GuitarView, DrumView, DRUM_NAMES, drumGroup, HAND, TRACK_COLORS } from './views.js';
@@ -202,7 +203,7 @@ async function openSong(id) {
     setTimeout(() => toast('Эта композиция собрана старой версией разбора PDF: ритм и бенды в ней могут быть неточными. Удалите её и объедините файлы заново.', 9000), 600);
   // PDF Songsterr, разобранный старой версией: разбираем заново (если ноты не правили вручную)
   if (song.source === 'pdf' && !song.omr && !song.omrReport && song.tracks.length === 1 && (song.pv || 1) < PARSER_VERSION && P.raw) {
-    const edited = song.tracks.some(t => t.notes.some(n => n.edited || n.deleted));
+    const edited = song.tracks.some(t => t.notes.some(n => n.edited || n.deleted || n.x?.manualGuide));
     if (!edited || song.lyricsVersion !== PARSER_VERSION) {
       try {
         busy(true, 'Обновляю разбор файла…');
@@ -228,8 +229,7 @@ async function openSong(id) {
   P.mute = set.mute || {}; P.prog = set.prog || {}; P.sound = set.sound || {}; P.retune = set.retune || {};
   P.show = set.show || tracks.map((t, i) => i).filter(i => tracks[i].kind !== 'drums' && (tracks[i].kind === 'piano' || tracks.length <= 2 || !tracks.some(x => x.kind === 'piano')));
   if (!P.show.length) P.show = tracks.map((t, i) => i).filter(i => tracks[i].kind !== 'drums').slice(0, 1);
-  const fretIdx = tracks.findIndex(t => t.tuning && isStringKind(t.kind));
-  P.gTrack = set.gTrack != null ? set.gTrack : (fretIdx >= 0 ? fretIdx : tracks.findIndex(t => t.tuning));
+  P.gTrack = guitarPart(tracks[set.gTrack]) ? set.gTrack : tracks.findIndex(guitarPart);
   P.loop = null; P.scoreShown = null;
   const firstStringed = tracks[P.show[0]] && isStringKind(tracks[P.show[0]].kind) && tracks[P.show[0]].tuning;
   P.dTrack = set.dTrack != null ? set.dTrack : tracks.findIndex(t => t.kind === 'drums');
@@ -332,7 +332,7 @@ function prepare() {
   const gt = tracks[P.gTrack];
   P.fretNotes = [];
   P.fretTuning = gt && gt.tuning;
-  if (gt && gt.tuning) {
+  if (guitarPart(gt)) {
     // показ в другом строе: высота та же, струны и лады пересчитаны
     const rt = P.retune && P.retune[P.gTrack];
     const newTun = rt ? retuneTarget(gt, rt) : null;
@@ -345,6 +345,7 @@ function prepare() {
       P.fretNotes.push({ s: time.toSec(n.t), e: time.toSec(n.t + n.d), m: r ? r.m : n.m, f: r ? r.f : n.f, st: r ? r.s : n.s, idx, x: n.x, octUp: r && r.octUp });
     });
     P.fretNotes.sort((a, b) => a.s - b.s || a.st - b.st);
+    inferGuitarGuides(P.fretNotes);
     const nextOn = new Map();
     for (let k = P.fretNotes.length - 1; k >= 0; k--) { const q = P.fretNotes[k]; if (nextOn.has(q.st)) q.next = nextOn.get(q.st); nextOn.set(q.st, k); }
     P.gBends = perform(gt, PPQ).bends;
@@ -384,11 +385,36 @@ function updateSub() {
     });
     picker.value = String(P.gTrack);
   }
+  $('guitarBar').hidden = !picker.length;
   picker.hidden = picker.length < 2;
+  $('guitarName').textContent = picker.length ? 'Партия: ' + (gt?.name || 'Гитара') : '';
+  updateGuitarSound();
 }
 
 function hasFrets(tr) {
-  return tr.tuning && tr.notes.some(n => !n.deleted && n.s != null);
+  return guitarPart(tr);
+}
+function updateGuitarSound() {
+  if ($('guitarBar').hidden) return;
+  const names = [];
+  if (engine.playing) for (const opt of $('fretPart').options) {
+    const i = Number(opt.value);
+    if (!P.mute[i] && engine.audio.trackLevel(i) > 0.0008) names.push(P.song.tracks[i].name);
+  }
+  let bendFeedback = '';
+  const pitch = train?.pitch;
+  if (pitch != null) {
+    const t = P.time.toSec(engine.nowTick());
+    for (let i = firstIdx(P.fretNotes, t + 0.001) - 1; i >= 0 && P.fretNotes[i].s >= t - 8; i--) {
+      const q = P.fretNotes[i];
+      if (q.e <= t || !(q.x?.bend?.max > 0)) continue;
+      const cents = Math.round((pitch - q.m - q.x.bend.max) * 100);
+      bendFeedback = ' · Цель бенда: ' + (Math.abs(cents) <= 8 ? 'точно' : (cents > 0 ? '+' : '') + cents + ' ц.');
+      break;
+    }
+  }
+  const label = (engine.playing ? (names.length ? 'Звучит: ' + names.join(' + ') : 'Гитары молчат') : 'Пауза') + bendFeedback;
+  if ($('guitarSound').textContent !== label) $('guitarSound').textContent = label;
 }
 function selectFretTrack(i) {
   P.gTrack = i;
@@ -490,7 +516,7 @@ function frame() {
   updLyr(t);
   const now = performance.now();
   if (now - lastUi > 150) {
-    lastUi = now;
+    lastUi = now; updateGuitarSound();
     if (!engine.loading) $('posLbl').textContent = 'Такт ' + P.song.measures[mi].n;
     $('timeLbl').textContent = fmt(t);
     if (!seeking) $('seek').value = Math.round(t / Math.max(0.1, P.time.total) * 1000);
@@ -857,11 +883,18 @@ function fillTracks() {
 
 // ---------- Ноты по тактам ----------
 $('listBtn').onclick = () => { fillList(); $('listSheet').classList.add('on'); };
-function fillList() {
+function fillList(selectedTrack) {
   const box = $('mList'); box.innerHTML = '';
-  const ti = P.mode === 'fret' ? P.gTrack : P.mode === 'drums' ? P.dTrack : P.show[0];
+  const guitarView = P.mode === 'fret' || P.mode === 'road';
+  const ti = selectedTrack ?? (guitarView ? P.gTrack : P.mode === 'drums' ? P.dTrack : P.show[0]);
   const tr = P.song.tracks[ti]; if (!tr) return;
   const head = document.createElement('div'); head.className = 'muted small'; head.textContent = 'Дорожка: ' + tr.name; box.appendChild(head);
+  const choose = document.createElement('select');
+  choose.setAttribute('aria-label', 'Партия для разметки');
+  P.song.tracks.forEach((part,i) => {
+    if (guitarView ? guitarPart(part) : P.mode === 'drums' ? part.kind === 'drums' : part.kind !== 'drums') choose.add(new Option(part.name, i));
+  });
+  if (choose.length > 1) { choose.value = String(ti); choose.onchange = () => fillList(Number(choose.value)); box.appendChild(choose); }
   const ts = techSummary(tr);
   const tb = document.createElement('div'); tb.className = 'tchips';
   if (ts.length) {
@@ -885,10 +918,45 @@ function fillList() {
     if (tr.kind === 'drums') sp.textContent = groups.map(gg => gg.ns.map(n => DRUM_NAMES[n.m] || ('№' + n.m)).join('+')).join('  ·  ');
     else sp.textContent = groups.map(gg => gg.ns.sort((a, b) => a.m - b.m).map(n => NAMES[(n.m + 12 * P.oct) % 12].replace('соль', 'сол') + (Math.floor((n.m + 12 * P.oct) / 12) - 1) + (n.f != null && tr.tuning ? `(${n.s + 1}/${n.f})` : '')).join('+')).join('  ·  ');
     d.appendChild(sp);
+    const edit = document.createElement('button'); edit.className = 'chip'; edit.textContent = 'Техники';
+    edit.onclick = e => { e.stopPropagation(); openGuide(tr, arr); };
+    d.appendChild(edit);
     d.onclick = () => { const i = P.song.measures.findIndex(m => m.n === mn); gotoMeasure(i); $('listSheet').classList.remove('on'); };
     box.appendChild(d);
   }
   const c = box.querySelector('.cur'); if (c) c.scrollIntoView({ block: 'center' });
+}
+
+function openGuide(tr, notes) {
+  const picker = $('guideNote'), box = $('guideChoices'), song = P.song;
+  picker.replaceChildren();
+  notes.forEach((n,i) => picker.add(new Option(noteName(n.m) + (n.s != null ? ' · струна ' + (n.s + 1) + ', лад ' + n.f : '') + ' · ' + (i+1), i)));
+  const family = guideFamily(tr);
+  let selected;
+  function refresh() {
+    const n = notes[Number(picker.value)];
+    selected = new Set(n.x?.guides || []);
+    $('guideDetail').value = n.x?.detail || '';
+    box.replaceChildren();
+    const describe = () => { $('guideHow').textContent = [...selected].map(id => GUIDE[id]?.how).filter(Boolean).join(' '); };
+    for (const [id, g] of Object.entries(GUIDE)) {
+      if (!family.includes(g.for) && !selected.has(id)) continue;
+      const button = document.createElement('button');
+      button.className = 'chip'; button.textContent = g.name;
+      button.classList.toggle('on', selected.has(id));
+      button.onclick = () => { if (selected.has(id)) selected.delete(id); else selected.add(id); button.classList.toggle('on', selected.has(id)); describe(); };
+      box.appendChild(button);
+    }
+    describe();
+  }
+  picker.onchange = refresh; refresh();
+  $('guideSave').onclick = async () => {
+    const n = notes[Number(picker.value)];
+    n.x = { ...n.x, manualGuide: true, guides: [...selected], detail: $('guideDetail').value.trim() };
+    await idb.put('songs', song.id, song);
+    prepare(); fillList(song.tracks.indexOf(tr)); $('guideSheet').classList.remove('on');
+  };
+  $('guideSheet').classList.add('on');
 }
 
 // ---------- Правка нот (PDF) ----------
@@ -1253,7 +1321,7 @@ function deleteTrack(i) {
   const shiftMap = obj => { const o = {}; for (const k in obj) { const j = +k; if (j < i) o[j] = obj[k]; else if (j > i) o[j - 1] = obj[k]; } return o; };
   P.mute = shiftMap(P.mute); P.prog = shiftMap(P.prog); engine.prog = P.prog;
   P.show = P.show.filter(x => x !== i).map(x => x > i ? x - 1 : x); if (!P.show.length) P.show = [0];
-  if (P.gTrack === i) P.gTrack = s.tracks.findIndex(t => t.tuning); else if (P.gTrack > i) P.gTrack--;
+  if (P.gTrack === i) P.gTrack = s.tracks.findIndex(guitarPart); else if (P.gTrack > i) P.gTrack--;
   ED.delArm = -1; ED.solo = null; markCustom(); saveSet();
   persist(true); toast(`Дорожка «${name}» удалена`);
 }
@@ -1325,7 +1393,7 @@ function showTech(ids) {
     const c = document.createElement('div'); c.className = 'tcard';
     c.innerHTML = `<div class="thead"><div class="tsym"></div><div><div class="tname"></div><div class="tfor muted small"></div></div></div><div class="tanim">${ANIM_HTML[T.anim] || ''}</div><p class="ttext"></p><p class="thow"><b>Как играть:</b> <span></span></p>`;
     c.querySelector('.tsym').textContent = T.sym; c.querySelector('.tname').textContent = T.name;
-    c.querySelector('.tfor').textContent = { g: 'гитара', b: 'бас-гитара', p: 'фортепиано', gp: 'гитара и фортепиано' }[T.for] || '';
+    c.querySelector('.tfor').textContent = { g: 'гитара', b: 'бас-гитара', p: 'фортепиано', d: 'ударные', m: 'мелодическая перкуссия', s: 'смычковые', w: 'духовые', gp: 'гитара и фортепиано' }[T.for] || '';
     c.querySelector('.ttext').textContent = T.text; c.querySelector('.thow span').textContent = T.how;
     box.appendChild(c);
   }

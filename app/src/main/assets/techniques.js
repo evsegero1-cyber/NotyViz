@@ -13,7 +13,9 @@
 //       stacc, acc: 1 акцент | 2 маркато | 3 тенуто, leg (легато к следующей), orn:'turn'|'iturn'|'umord'|'lmord',
 //       gliss, grace:'before'|'on'|'bend', ferm:'short'|'medium'|'long', cresc:'cresc'|'dim', dyn:'pp'…, tup:'3:2', ott:'8va'… }
 
+import { GUIDE, guideLabel } from './performance-guide.js';
 export const TECH = {
+  ...GUIDE,
   hp_h: { name: 'Hammer-on (хаммер-он)', sym: 'h', for: 'g', text: 'Следующая нота извлекается ударом пальца левой руки по ладу, без удара медиатором.', how: 'Сыграйте первую ноту, затем резко «молоточком» опустите другой палец на нужный лад той же струны.', anim: 'hammer' },
   hp_p: { name: 'Pull-off (пулл-офф)', sym: 'p', for: 'g', text: 'Следующая нота звучит, когда палец снимается со струны.', how: 'Прижмите обе ноты заранее. Снимая верхний палец, слегка зацепите струну вниз — прозвучит нижняя нота.', anim: 'pull' },
   sl: { name: 'Слайд (скольжение)', sym: '/ \\', for: 'g', text: 'Палец скользит по струне к другому ладу, звук не прерывается.', how: 'Не ослабляя прижатия, ведите палец вдоль струны до целевого лада. При «legato»-слайде вторую ноту не играют медиатором, при «shift» — играют.', anim: 'slide' },
@@ -70,7 +72,7 @@ export const velToDyn = v => v < 30 ? 'pp' : v < 50 ? 'p' : v < 66 ? 'mp' : v < 
 // Список техник ноты → ключи справочника TECH
 export function techIds(x, kind) {
   if (!x) return [];
-  const ids = [];
+  const ids = (x.guides || []).filter(id => GUIDE[id]);
   if (x.hp) ids.push('hp_' + x.hp);
   if (x.sl) ids.push(kind === 'piano' ? 'gliss' : 'sl');
   if (x.gliss) ids.push('gliss');
@@ -108,7 +110,7 @@ export function techIds(x, kind) {
 // Короткая подпись техники для табулатуры и падающих нот
 export function techLabel(x) {
   if (!x) return '';
-  const L = [];
+  const L = [guideLabel(x), x.stroke === 'up' ? '↑' : x.stroke === 'down' ? '↓' : ''].filter(Boolean);
   if (x.harm) L.push(x.harm === 'N' ? 'NH' : x.harm + 'H');
   if (x.pm) L.push('PM');
   if (x.tap) L.push('T');

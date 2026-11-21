@@ -64,7 +64,7 @@
     <div id="lyrL" class="lyr lyrl"></div>
     <div id="hud" class="hud"></div>
   </div>
-  <select id="fretPart" aria-label="Партия на грифе" hidden></select>
+  <div id="guitarBar" hidden><div><b id="guitarName"></b><small id="guitarSound"></small></div><select id="fretPart" aria-label="Выбрать гитару"></select></div>
   <div class="ctrl">
     <div id="lyrP" class="lyr"></div>
     <div id="secBar" class="secbar"></div>
@@ -260,6 +260,14 @@
   </div>
 </div>
 
+<div id="guideSheet" class="sheet"><div class="sheet-body">
+    <div class="sheet-head"><b>Техника исполнения</b><button class="icon" data-close>✕</button></div>
+    <label class="lbl" for="guideNote">Нота</label><select id="guideNote"></select>
+    <label class="lbl">Приёмы</label><div id="guideChoices" class="row btns" style="flex-wrap:wrap"></div>
+    <p id="guideHow" class="muted small"></p>
+    <label class="lbl" for="guideDetail">Пальцы, штрих или позиция</label><input id="guideDetail" maxlength="24" placeholder="Например: 4→3">
+    <button id="guideSave" class="primary">Сохранить</button>
+  </div></div>
 <div id="editSheet" class="sheet">
   <div class="sheet-body">
     <div class="sheet-head"><b id="edTitle">Нота</b><button class="icon" data-close>✕</button></div>

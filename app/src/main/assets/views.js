@@ -418,6 +418,14 @@ export class GuitarView {
         g.globalAlpha = 1;
       }
     }
+    const barred = new Set(active.filter(q => q.x?.guides?.includes('barre')).map(q => q.f));
+    for (const fret of barred) {
+      const strings = active.filter(q => q.f === fret).map(q => q.st);
+      if (strings.length < 2 || fret <= 0) continue;
+      const x = fretXf(fret);
+      g.strokeStyle = '#ffd23f'; g.lineWidth = 6; g.beginPath();
+      g.moveTo(x, fbTop + Math.min(...strings) * sg); g.lineTo(x, fbTop + Math.max(...strings) * sg); g.stroke();
+    }
     for (const q of active) {
       const x = q.x || {};
       const dur = Math.max(0.001, q.e - q.s), fr = (t - q.s) / dur;
@@ -433,7 +441,7 @@ export class GuitarView {
       if (x.bend && semi > 0.2) { g.fillStyle = '#ff8a3d'; g.font = '700 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'bottom'; g.fillText('↑' + bendText(semi).trim(), bx, y - r - 6); }
       if (x.tap) { g.strokeStyle = '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(bx, y, r + 4, 0, 7); g.stroke(); }
       g.fillStyle = x.pm ? '#fff' : '#000'; g.font = '700 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText(x.dead ? 'x' : Math.round(ff), bx, y + 0.5);
+      g.fillText(x.dead ? 'x' : x.leftFinger || Math.round(ff), bx, y + 0.5);
     }
     // аккорд: название и схема (как держать на грифе)
     if (ctx.chord) {
@@ -539,6 +547,8 @@ export class DrumView {
       g.fillText(grp.name, x + lw / 2, padTop + padH / 2 - (grp.foot ? 7 : 0));
       if (grp.foot) { g.font = '11px system-ui'; g.fillStyle = on ? '#000' : '#8b93a3'; g.fillText('нога', x + lw / 2, padTop + padH / 2 + 10); }
     }
+    const cap = techCaption(notes, t, ctx.firstIdx, 'drums');
+    if (cap) drawCaption(g, cap, W / 2, ctx.land ? 60 : 14, t);
     g.fillStyle = 'rgba(255,255,255,.25)'; g.fillRect(0, padTop - 1, W, 2);
     g.textAlign = 'left';
   }

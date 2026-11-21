@@ -3,6 +3,7 @@
 // падающие ноты совпадают со звуком один в один. Струна и лад — из партитуры.
 import { PPQ, kindFromProgram, programName, isStringKind } from './model.js';
 import { barOf } from './import-midi.js';
+import { guideFromText } from './performance-guide.js';
 import { dynName } from './techniques.js';
 
 export function importScore(alphaTab, bytes, fileName) {
@@ -84,8 +85,7 @@ export function scoreToSong(alphaTab, score, settings, fileName) {
     const program = st.playbackInfo.program;
     let kind = kindFromProgram(program, isDrum, st.name);
     const tuning = staff && staff.tuning && staff.tuning.length ? Array.from(staff.tuning) : null;
-    if (tuning && !isDrum && kind === 'other') kind = tuning.length <= 5 && tuning[0] < 50 ? 'bass' : 'guitar';
-    if (kind === 'piano' && tuning && tuning.length >= 4 && !/piano|key/i.test(st.name)) kind = tuning[0] < 50 ? 'bass' : 'guitar';
+    if (tuning && !isDrum && !isStringKind(kind) && /guitar|гитар|rhythm guitar/i.test(st.name)) kind = 'guitar';
     const notes = perTrack[i].sort((a, b) => a.t - b.t || a.m - b.m);
     const tr = {
       name: (st.name || '').trim() || programName(program, kind), instrument: programName(program, kind), kind, program,
@@ -149,6 +149,16 @@ function techFrom(nt, b, kind, stringed) {
   const vib = nt.vibrato || b.vibrato; if (vib) x.vib = vib === 2 ? 'wide' : 'slight';
   if (nt.trillValue > 0) x.tr = nt.trillValue;
   if (b.tap || nt.isLeftHandTapped) x.tap = true;
+  if (stringed) {
+    const guides = [];
+    if (b.golpe) guides.push('bodyHit');
+    if (nt.isLeftHandTapped) guides.push('tapLeft');
+    else if (b.tap) guides.push('tapRight');
+    if (b.isBarre && nt.fret === b.barreFret) guides.push('barre');
+    if (nt.leftHandFinger >= 0) x.leftFinger = ['T','1','2','3','4'][nt.leftHandFinger];
+    if (nt.rightHandFinger >= 0) x.rightFinger = ['p','i','m','a','c'][nt.rightHandFinger];
+    if (guides.length) x.guides = guides;
+  }
   if (nt.isPalmMute || b.isPalmMute) x.pm = true;
   if (nt.harmonicType) x.harm = HARM[nt.harmonicType] || 'N';
   if (b.tremoloPicking) x.trem = b.tremoloPicking.marks || 3;
@@ -210,6 +220,8 @@ function mapScore(alphaTab, lookup, scoreTrack, tr, notes, div, kind) {
     const staffIdx = found.b.voice.bar.staff.index;
     if (scoreTrack.staves.length > 1) n.h = staffIdx === 0 ? 'R' : 'L';
     const x = techFrom(found.nt, found.b, kind, !!tr.tuning);
+    const marked = guideFromText(found.b.text, tr);
+    if (marked) x.guides = [...new Set([...(x.guides || []), marked])];
     // повторы тремоло и трели — та же нота партитуры: подпись техники только у первой
     if (Object.keys(x).length) n.x = x;
     if (tr.tuning && found.nt.isStringed) {

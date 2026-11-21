@@ -113,7 +113,8 @@ export class MicNotes {
     const r = detectPitch(this.buf, this.ctx.sampleRate, { fMin: 40, fMax: 1600, gate: 0.006 });
     const now = performance.now();
     if (!r || r.clarity < 0.82) { this.cand = null; if (!r || r.rms < this.lastRms * 0.3) this.last = null; this.lastRms = r ? r.rms : 0; return; }
-    const m = Math.round(freqToMidi(r.freq));
+    this.pitch = { midi: freqToMidi(r.freq), at: now };
+    const m = Math.round(this.pitch.midi);
     const attack = r.rms > this.lastRms * 1.6 && r.rms > 0.01;
     this.lastRms = r.rms;
     // нота засчитывается, когда держится 2 замера; повтор той же ноты — только с новой атакой
