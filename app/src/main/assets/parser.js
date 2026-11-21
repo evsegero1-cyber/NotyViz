@@ -5,7 +5,7 @@ import TEMPLATES from './templates.js';
 
 const GW = 8, GH = 11;
 // Версия разбора: при её смене сохранённые PDF Songsterr разбираются заново (2 — паузы, глухие ноты, штили ударных)
-export const PARSER_VERSION = 6; // 6 — гитара в низких строях не путается с басом; // 5 — темп: accel./rit., единица темпа, отметки выше подписей // 3 — форшлаги, бенды, части; 4 — слова песни
+export const PARSER_VERSION = 7; // 7 — фильтрация подписей в строках текста
 
 function mul(m, n) {
   return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
@@ -176,6 +176,14 @@ export function standardTuning(n, isBass) {
     6: [64, 59, 55, 50, 45, 40], 7: [64, 59, 55, 50, 45, 40, 35], 8: [64, 59, 55, 50, 45, 40, 35, 30]
   };
   return T[n] || T[6];
+}
+
+function isLyricRow(row) {
+  // PDF может хранить каждую букву отдельным глифом с пробелами между ними.
+  const line = row.map(ch => ch.c).join('').toLowerCase().replace(/[\s_]+/gu, '');
+  if (/[©®]|songsterr|copyright|allrightsreserved|propertyof|всеправазащищены|являетсясобственностью/.test(line)) return false;
+  const label = line.replace(/[\[\](){}.:#–—-]/g, '');
+  return !/^(?:\d+)?(?:припев|предприпев|куплет|вступление|проигрыш|бридж|соло|кода|intro|outro|prechorus|chorus|verse|bridge|instrumental|solo|interlude|refrain)(?:\d+|[ivx]+)?$/.test(label);
 }
 
 function cluster(vals, tol) {
@@ -573,13 +581,18 @@ async function parsePage(page, O, pageNo) {
     // Слова песни: строка под ритмом (буквы ~10 pt), разбиваем на слоги по промежуткам
     const lyr = [];
     {
-      const band = (out.chars || []).filter(ch => ch.y > bot + 14 && ch.y < bot + 80 && ch.x > sx0 - 5 && ch.x < sx1 + 5 && ch.h > 8 && ch.h < 13);
-      band.sort((a, b) => a.y - b.y || a.x - b.x);
-      const rowsY = cluster(band.map(c => c.y), 2);
-      const rowOf = c => rowsY.reduce((bi, y, i) => Math.abs(y - c.y) < Math.abs(rowsY[bi] - c.y) ? i : bi, 0);
-      // ряд слов — самый нижний ряд с буквами (выше могут быть подписи вроде «let ring»)
-      const best = rowsY.length ? rowsY.reduce((bi, y, i) => band.filter(c => rowOf(c) === i).length > band.filter(c => rowOf(c) === bi).length ? i : bi, 0) : -1;
-      const row = band.filter(c => rowOf(c) === best).sort((a, b) => a.x - b.x);
+      const band = (out.chars || []).filter(ch => ch.y > bot + 14 && ch.y < bot + 80 && ch.h > 8 && ch.h < 13);
+      const rowsY = cluster(band.map(ch => ch.y), 2);
+      const rows = rowsY.map(() => []);
+      for (const ch of band) {
+        const idx = rowsY.reduce((best, y, i) => Math.abs(y - ch.y) < Math.abs(rowsY[best] - ch.y) ? i : best, 0);
+        rows[idx].push(ch);
+      }
+      const candidates = rows.map(r => r.sort((a, b) => a.x - b.x))
+        .filter(isLyricRow)
+        .map(r => r.filter(ch => ch.x > sx0 - 5 && ch.x < sx1 + 5))
+        .filter(r => r.some(ch => /[A-Za-zА-Яа-яЁё]/.test(ch.c)));
+      const row = candidates.reduce((best, r) => r.length > best.length ? r : best, []);
       // ширина буквы из шрифта бывает в другом масштабе — поправку берём по соседним буквам
       const rat = [];
       for (let k = 1; k < row.length; k++) { const a = row[k - 1], b = row[k]; if (a.w > 0 && a.c.trim() && b.c.trim()) { const r = (b.x - a.x) / a.w; if (r > 0.2 && r < 1.6) rat.push(r); } }

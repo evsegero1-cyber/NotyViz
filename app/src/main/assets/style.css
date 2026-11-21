@@ -301,3 +301,7 @@ body.land .sectag{top:52px}
 body.land .lyrl{display:block!important;position:absolute;left:8px;top:52px;z-index:4;max-width:min(60%,560px);background:rgba(23,26,33,.85);text-align:left}
 body.land .lyrl.off{background:none}
 body .lyr.none,body.land .lyrl.none{display:none!important}
+
+#speedSheet{z-index:12}
+#fretPart{align-self:center;max-width:95%;margin:3px 8px;padding:6px 12px}
+#fretPart[hidden]{display:none}

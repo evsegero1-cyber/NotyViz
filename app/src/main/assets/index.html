@@ -64,6 +64,7 @@
     <div id="lyrL" class="lyr lyrl"></div>
     <div id="hud" class="hud"></div>
   </div>
+  <select id="fretPart" aria-label="Партия на грифе" hidden></select>
   <div class="ctrl">
     <div id="lyrP" class="lyr"></div>
     <div id="secBar" class="secbar"></div>
@@ -173,6 +174,13 @@
   </div>
 </section>
 
+<div id="speedSheet" class="sheet">
+  <form id="speedForm" class="sheet-body">
+    <div class="sheet-head"><label for="speedPercent">Скорость воспроизведения, %</label><button type="button" class="icon" data-close aria-label="Закрыть">✕</button></div>
+    <div class="row gap"><input id="speedPercent" type="number" inputmode="numeric" min="25" max="150" step="1" required><button class="primary">Применить</button></div>
+    <p class="muted small">От 25 до 150%. 100% — исходный темп.</p>
+  </form>
+</div>
 <div id="sheet" class="sheet">
   <div class="sheet-body">
     <div class="sheet-head"><b>Настройки</b><button class="icon" data-close>✕</button></div>
@@ -181,6 +189,7 @@
 
     <label class="lbl">Скорость</label>
     <div class="seg" id="speedSeg"></div>
+    <button id="exactSpeed" class="chip">Ввести скорость в %</button>
 
     <label class="lbl">Повтор фрагмента (такты)</label>
     <div class="row gap">

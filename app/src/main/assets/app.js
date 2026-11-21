@@ -198,19 +198,23 @@ async function openSong(id) {
   P.song = song; P.time = makeTime(song); P.raw = null;
   if (song.source !== 'midi') P.raw = await idb.get('files', id);
   // объединённая композиция из PDF, собранная старым разбором: исправления разбора в неё не попадают
-  if (song.source === 'merge' && (song.pv || 1) < PARSER_VERSION && (song.files || []).some(f => /\.pdf$/i.test(f)))
+  if (song.source === 'merge' && (song.pv || 1) < 6 && (song.files || []).some(f => /\.pdf$/i.test(f)))
     setTimeout(() => toast('Эта композиция собрана старой версией разбора PDF: ритм и бенды в ней могут быть неточными. Удалите её и объедините файлы заново.', 9000), 600);
   // PDF Songsterr, разобранный старой версией: разбираем заново (если ноты не правили вручную)
   if (song.source === 'pdf' && !song.omr && !song.omrReport && song.tracks.length === 1 && (song.pv || 1) < PARSER_VERSION && P.raw) {
     const edited = song.tracks.some(t => t.notes.some(n => n.edited || n.deleted));
-    if (!edited) {
+    if (!edited || song.lyricsVersion !== PARSER_VERSION) {
       try {
         busy(true, 'Обновляю разбор файла…');
         const fresh = fromBeatSong(await parseSongsterrPdf(pdfjsLib, P.raw.slice()));
         if (fresh.tracks[0].notes.length) {
-          const tr = fresh.tracks[0], o = song.tracks[0];
-          for (const k of ['name', 'program', 'hand', 'channel']) if (o[k] != null) tr[k] = o[k];
-          Object.assign(song, { pv: fresh.pv, tempos: fresh.tempos, measures: fresh.measures, totalTicks: fresh.totalTicks, tracks: fresh.tracks }); if (fresh.lyrics) song.lyrics = fresh.lyrics; else delete song.lyrics;
+          if (!edited) {
+            const tr = fresh.tracks[0], o = song.tracks[0];
+            for (const k of ['name', 'program', 'hand', 'channel']) if (o[k] != null) tr[k] = o[k];
+            Object.assign(song, { pv: fresh.pv, tempos: fresh.tempos, measures: fresh.measures, totalTicks: fresh.totalTicks, tracks: fresh.tracks });
+          }
+          song.lyricsVersion = PARSER_VERSION;
+          if (fresh.lyrics) song.lyrics = fresh.lyrics; else delete song.lyrics;
           await idb.put('songs', song.id, song); await idb.put('meta', song.id, songSummary(song));
           toast('Файл разобран заново новой версией разбора');
         }
@@ -372,7 +376,26 @@ function updateSub() {
   if ((P.mode === 'fret' || P.mode === 'road') && gt && gt.tuning) txt = `Строй ${tuningLine(P.fretTuning || gt.tuning, gt.kind)}${P.retune && P.retune[P.gTrack] ? ' (перестроено)' : ''} · ${gt.name}`;
   else if (tracks.length === 1 && gt && gt.tuning) txt += ' · ' + describeTuning(gt.tuning, gt.kind).name;
   $('pSub').textContent = txt;
+  const picker = $('fretPart');
+  picker.replaceChildren();
+  if (P.mode === 'fret' || P.mode === 'road') {
+    tracks.forEach((tr, i) => {
+      if (hasFrets(tr)) picker.add(new Option('🎸 ' + (tr.name || 'Партия ' + (i + 1)), i));
+    });
+    picker.value = String(P.gTrack);
+  }
+  picker.hidden = picker.length < 2;
 }
+
+function hasFrets(tr) {
+  return tr.tuning && tr.notes.some(n => !n.deleted && n.s != null);
+}
+function selectFretTrack(i) {
+  P.gTrack = i;
+  saveSet(); prepare(); updateSub();
+  if (train) train.rebuild();
+}
+$('fretPart').onchange = e => selectFretTrack(Number(e.target.value));
 
 // ---------- Режимы ----------
 function setMode(mode, silent) {
@@ -608,7 +631,21 @@ $('seek').onchange = () => { seeking = false; engine.seekTick(P.time.toTick($('s
 function gotoMeasure(i) { i = Math.max(0, Math.min(P.song.measures.length - 1, i)); engine.seekTick(P.song.measures[i].tick); }
 $('prevBtn').onclick = () => { const t = P.time.toSec(engine.nowTick()), mi = P.time.measureAtSec(t); if (t - P.time.mStarts[mi] > 0.4) gotoMeasure(mi); else gotoMeasure(mi - 1); };
 $('nextBtn').onclick = () => gotoMeasure(P.time.measureAtSec(P.time.toSec(engine.nowTick())) + 1);
-$('speedBtn').onclick = () => setSpeed(SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SPEEDS.length]);
+function openSpeed() {
+  const input = $('speedPercent');
+  input.value = Math.round(P.speed * 100);
+  $('speedSheet').classList.add('on');
+  input.focus(); input.select();
+}
+$('speedBtn').onclick = $('exactSpeed').onclick = openSpeed;
+$('speedForm').onsubmit = e => {
+  e.preventDefault();
+  const input = $('speedPercent');
+  if (!input.reportValidity()) return;
+  setSpeed(input.valueAsNumber / 100);
+  input.blur();
+  $('speedSheet').classList.remove('on');
+};
 function setSpeed(s) { P.speed = s; engine.setSpeed(s); updateUi(); fillSeg(); }
 $('metroBtn').onclick = () => { P.metro = !P.metro; engine.setMetronome(P.metro); updateUi(); };
 $('loopBtn').onclick = () => {
@@ -765,12 +802,13 @@ function fillTracks() {
     if (tr.tuning && tr.kind !== 'drums') { const c = document.createElement('div'); c.className = 'small tuning'; c.textContent = 'Строй: ' + tuningLine(tr.tuning, tr.kind); info.appendChild(c); }
     const showBtn = document.createElement('button'); showBtn.className = 'chip';
     const isFret = P.mode === 'fret' || P.mode === 'road', isDr = P.mode === 'drums';
-    const canShow = isFret ? !!(tr.tuning && tr.notes.some(n => n.s != null)) : isDr ? tr.kind === 'drums' : tr.kind !== 'drums';
+    const canShow = isFret ? hasFrets(tr) : isDr ? tr.kind === 'drums' : tr.kind !== 'drums';
     const on = isFret ? P.gTrack === i : isDr ? P.dTrack === i : P.show.includes(i);
     showBtn.textContent = isFret ? (on ? 'На грифе' : 'Гриф') : isDr ? (on ? 'Показ ✓' : 'Показ') : (on ? 'Показ ✓' : 'Показ');
     showBtn.classList.toggle('on', on); showBtn.disabled = !canShow; if (!canShow) showBtn.style.opacity = .4;
     showBtn.onclick = () => {
-      if (isFret) P.gTrack = i; else if (isDr) P.dTrack = i;
+      if (isFret) { selectFretTrack(i); fillTracks(); return; }
+      if (isDr) P.dTrack = i;
       else if (P.show.includes(i)) { if (P.show.length > 1) P.show = P.show.filter(x => x !== i); }
       else P.show = [...P.show, i].sort((x, y) => x - y);
       saveSet(); prepare(); updateSub(); P.scoreShown = P.mode === 'score' ? null : P.scoreShown; if (P.mode === 'score') showScore(); fillTracks();
