@@ -13,19 +13,19 @@ const INLAY = [3, 5, 7, 9, 12, 15, 17, 19, 21, 24];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export class RoadView {
-  constructor() { this.cam = null; this.camV = { a: 0, b: 0 }; this.win = 0; }
+  constructor() { this.cam = null; this.camV = { a: 0, b: 0 }; }
   setTrack(track, notes, tuningNames) {
     this.n = track.tuning.length; this.notes = notes; this.names = tuningNames;
-    this.cam = null; this.win = 0;
+    this.cam = null;
     // хаммер/пулл приходят на следующую ноту той же струны — её рисуем «пустой» (без удара медиатором)
     for (const q of notes) if (q.x && q.x.hp && q.next != null && notes[q.next]) notes[q.next].hpIn = q.x.hp;
     // группы одновременных нот и повторы аккордов
     let prev = null;
     for (let i = 0; i < notes.length;) {
-      let j = i; while (j + 1 < notes.length && notes[j + 1].s - notes[i].s < 0.03) j++;
+      let j = i; while (j + 1 < notes.length && notes[j + 1].s === notes[i].s) j++;
       const grp = notes.slice(i, j + 1), sig = grp.map(q => q.st + ':' + q.f).sort().join(',');
       const rep = grp.length > 1 && prev && prev.sig === sig && grp[0].s - prev.s < 1.3;
-      for (const q of grp) { q.gi = i; q.gn = grp.length; q.rep = rep; }
+      for (const q of grp) { q.gi = i; q.gn = grp.length; q.rep = rep; q.nextAttack = notes[j + 1]?.s ?? Infinity; }
       prev = { sig, s: grp[0].s }; i = j + 1;
     }
   }
@@ -45,14 +45,7 @@ export class RoadView {
     g.fillStyle = '#07090d'; g.fillRect(0, 0, W, H);
     if (!notes) return;
     const now = performance.now(), dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
-    // --- окно времени: чем плотнее ноты, тем меньше секунд видно (ноты не налезают друг на друга) ---
-    const gaps = [];
-    for (let i = firstIdx(notes, t), last = null; i < notes.length && gaps.length < 24; i++) { const q = notes[i]; if (q.s > t + 4) break; if (last != null && q.s - last > 0.03) gaps.push(q.s - last); if (last == null || q.s - last > 0.03) last = q.s; }
-    gaps.sort((a, b) => a - b);
-    const med = gaps.length ? gaps[gaps.length >> 1] : 0.5;
-    const target = clamp(Math.min(3.4 * speed, med * 11), 1.1, 4.5);
-    if (!this.win) this.win = target; else this.win += (target - this.win) * (1 - Math.exp(-dt * 0.9));
-    const win = this.win;
+    const win = (ctx.preview || 2.2) * speed;
     // --- камера: держит нужные лады в кадре, двигается плавно (пружина без рывков) ---
     const nd = this.need(t, notes, firstIdx, 1.8) || (this.cam ? { lo: Math.round((this.cam.a + this.cam.b) / 2), hi: Math.round((this.cam.a + this.cam.b) / 2) } : { lo: 1, hi: 5 });
     const span = Math.max(5, nd.hi - nd.lo + 3);
@@ -70,7 +63,7 @@ export class RoadView {
     const nearY = H - neckH;
     const horY = top + (nearY - top) * 0.04;
     const padL = 34, nearL = padL, nearR = W - 8, cx = (nearL + nearR) / 2;
-    const K = 1.5;
+    const K = 0.45;
     const s1 = 1 / (1 + K);
     const u = z => (1 / (1 + z * K) - s1) / (1 - s1);                 // 1 — у игрока, 0 — у горизонта
     const yOf = z => horY + (nearY - horY) * u(z);
@@ -119,13 +112,14 @@ export class RoadView {
     const gemW = (q, z) => q.f === 0 ? (nearR - nearL) * 0.9 * scl(z) : Math.min(laneW * 0.8, Math.max(30, laneW * 0.6)) * scl(z);
     for (const q of vis) {
       const x = q.x || {}, col = STRING_COLORS[q.st % STRING_COLORS.length], open = q.f === 0;
-      const on = q.s <= t + 0.005 && q.e > t;
+      const end = Math.min(q.e, notes[q.next]?.s ?? Infinity);
+      const on = q.s <= t && end > t;
       if (on) active.push(q);
       const dur = Math.max(0.001, q.e - q.s);
       // хвост: от текущего момента (или начала) до конца ноты — с бендом, слайдом, вибрато
-      const tA = Math.max(q.s, t), tB = Math.min(q.e, t + win);
+      const tA = Math.max(q.s, t), tB = Math.min(end, t + win);
       const tech = x.bend || x.sl || x.slIn || x.vib || x.trem || x.tr != null || x.ring;
-      if ((dur > Math.max(0.42, med * 1.4) || (tech && dur > 0.15)) && tB > tA + 0.01) {
+      if ((dur > 0.5 || (tech && dur > 0.15)) && tB > tA + 0.01) {
         const hw = open ? (nearR - nearL) * 0.42 : Math.min(laneW * 0.14, 9);
         const L = [], R = [];
         const N = Math.max(4, Math.min(40, Math.ceil((tB - tA) / 0.03)));
@@ -137,8 +131,8 @@ export class RoadView {
           L.push([xAt(xc - hw, z), y]); R.push([xAt(xc + hw, z), y]);
         }
         g.beginPath(); L.forEach((p, k) => k ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); for (let k = R.length - 1; k >= 0; k--) g.lineTo(R[k][0], R[k][1]); g.closePath();
-        g.fillStyle = col; g.globalAlpha = on ? 0.6 : 0.36; g.fill(); g.globalAlpha = 1;
-        g.strokeStyle = shade(col, 0.35); g.lineWidth = 1; g.globalAlpha = 0.8;
+        g.fillStyle = col; g.globalAlpha = on ? 0.45 : 0.17; g.fill(); g.globalAlpha = 1;
+        g.strokeStyle = shade(col, 0.35); g.lineWidth = 1; g.globalAlpha = 0.4;
         g.beginPath(); L.forEach((p, k) => k ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.stroke();
         g.beginPath(); R.forEach((p, k) => k ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.stroke(); g.globalAlpha = 1;
         if (x.trem || (x.tr != null && !x.trillAux)) { // тремоло и трель: чёрточки поперёк хвоста
@@ -147,38 +141,35 @@ export class RoadView {
         }
         if (x.ring) { const z = zOf(tB); const p = P(open ? (fa + fb) / 2 : q.f, q.st, z); g.fillStyle = col; g.font = '600 10px system-ui'; g.textAlign = 'center'; g.textBaseline = 'bottom'; if (z < 0.98) g.fillText('l.r.', p.x, p.y - 2); }
       }
-      // голова ноты: летит, у линии удара останавливается и горит до конца ноты
-      const passed = q.s < t - 0.005;
-      if (passed && !on && t - q.e > 0.12) continue;
-      const z = passed ? 0 : zOf(q.s);
-      const fr = on ? (t - q.s) / dur : 0;
-      const ff = open ? null : on ? trillFret(q, t) !== q.f ? trillFret(q, t) : slideAt(q, fr) : slideAt(q, 0);
-      const dy = on ? (bendAt(x, fr) * 0.9 + vibAt(x, t) * 0.55) * LIFT : 0;
-      const s = scl(z), y = yOf(z) - (lift(q.st) + dy) * s, xc = open ? cx : xFret(ff);
-      const gh = gemH(z), gw = gemW(q, z), gx = xAt(xc, z) - gw / 2;
-      const fade = passed && !on ? 1 - (t - q.e) / 0.12 : 1;
-      if (!passed) { // тень и «ножка» до дороги
+      // После атаки нота остаётся только на струне грифа.
+      if (q.s <= t) continue;
+      const z = zOf(q.s);
+      const ff = open ? null : slideAt(q, 0);
+      const s = scl(z), y = yOf(z) - lift(q.st) * s, xc = open ? cx : xFret(ff);
+      const gap = (q.nextAttack - q.s) / win * (nearY - horY);
+      const gh = Math.max(6, Math.min(gemH(z), 0.8 * gap)), gw = gemW(q, z), gx = xAt(xc, z) - gw / 2;
+      const fade = nextS === q.s ? 1 : Math.max(0.38, 0.74 - z * 0.3);
+      { // тень и «ножка» до дороги
         g.fillStyle = 'rgba(0,0,0,.4)'; g.fillRect(xAt(xc, z) - gw * 0.45, yOf(z) - 1, gw * 0.9, 2);
         if (lift(q.st) * s > 3) { g.strokeStyle = shade(col, -0.45); g.lineWidth = 1; g.beginPath(); g.moveTo(xAt(xc, z), yOf(z)); g.lineTo(xAt(xc, z), y + gh / 2); g.stroke(); }
       }
-      if (!groups.has(q.gi)) groups.set(q.gi, []); groups.get(q.gi).push({ q, x: xAt(xc, z), y, gw, gh, z, passed });
-      if (q.rep && !on) continue; // повтор аккорда — только рамка
-      const isNext = nextS != null && Math.abs(q.s - nextS) < 0.03;
+      if (!groups.has(q.gi)) groups.set(q.gi, []); groups.get(q.gi).push({ q, x: xAt(xc, z), y, gw, gh, z });
+      if (q.rep) continue; // повтор аккорда — только рамка
+      const isNext = nextS != null && q.s === nextS;
       g.globalAlpha = fade * (x.ghost ? 0.5 : 1);
       if (x.harm) { // флажолет — ромб
         g.beginPath(); g.moveTo(gx + gw / 2, y - gh * 0.75); g.lineTo(gx + gw, y); g.lineTo(gx + gw / 2, y + gh * 0.75); g.lineTo(gx, y); g.closePath();
       } else rr(g, gx, y - gh / 2, gw, gh, Math.min(8, gh / 2.2));
-      if (q.hpIn) { g.fillStyle = 'rgba(7,9,13,.8)'; g.fill(); g.strokeStyle = on ? shade(col, 0.5) : col; g.lineWidth = Math.max(2, 3 * s); g.stroke(); }
-      else { g.fillStyle = on ? shade(col, 0.55) : col; g.fill(); g.strokeStyle = isNext ? '#fff' : x.acc ? '#fff' : 'rgba(255,255,255,.5)'; g.lineWidth = isNext ? 2.5 : x.acc ? 2 : 1; g.stroke(); }
-      if (on) { g.save(); g.shadowColor = col; g.shadowBlur = 18; g.strokeStyle = shade(col, 0.6); g.lineWidth = 2; g.stroke(); g.restore(); }
+      if (q.hpIn) { g.fillStyle = 'rgba(7,9,13,.8)'; g.fill(); g.strokeStyle = col; g.lineWidth = Math.max(2, 3 * s); g.stroke(); }
+      else { g.fillStyle = col; g.fill(); g.strokeStyle = isNext ? '#fff' : x.acc ? '#fff' : 'rgba(255,255,255,.5)'; g.lineWidth = isNext ? 2.5 : x.acc ? 2 : 1; g.stroke(); }
       if (x.pm) { g.save(); g.clip(); g.strokeStyle = 'rgba(0,0,0,.45)'; g.lineWidth = 2; for (let xx = gx - gh; xx < gx + gw; xx += 6) { g.beginPath(); g.moveTo(xx, y + gh / 2); g.lineTo(xx + gh, y - gh / 2); g.stroke(); } g.restore(); }
       if (x.dead) { const c0 = xAt(xc, z), r = gh * 0.3; g.strokeStyle = '#000'; g.lineWidth = 2; g.beginPath(); g.moveTo(c0 - r, y - r); g.lineTo(c0 + r, y + r); g.moveTo(c0 + r, y - r); g.lineTo(c0 - r, y + r); g.stroke(); }
       if (q.res) { g.strokeStyle = q.res === 'hit' ? '#3ccf8e' : '#ff5c5c'; g.lineWidth = 3; rr(g, gx - 2, y - gh / 2 - 2, gw + 4, gh + 4, 8); g.stroke(); }
-      if (gh > 10 && !open && !x.dead) { g.fillStyle = q.hpIn ? '#fff' : '#000'; g.font = `700 ${Math.round(Math.min(15, gh * 0.78))}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(Math.round(ff), xAt(xc, z), y + 0.5); }
+      if (s > 0.47 && !open && !x.dead) { g.fillStyle = q.hpIn ? '#fff' : '#000'; g.font = `700 ${Math.round(Math.max(9, Math.min(15, gh * 0.82)))}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(Math.round(ff), xAt(xc, z), y + 0.5); }
       if (x.ghost && s > 0.4) { g.fillStyle = col; g.font = `${Math.round(gh)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('(', gx - 4, y); g.fillText(')', gx + gw + 4, y); }
       g.globalAlpha = 1;
       // обозначения техник над нотой
-      if (s > 0.38 && !passed) {
+      if (s > 0.38) {
         if (x.bend) drawBendArrow(g, gx + gw + 6 * s, y + gh * 0.3, Math.max(10, 18 * s), x.bend.max, '#ff8a3d', /release/i.test(x.bend.type || '') && !/bend/i.test((x.bend.type || '').replace('release', '')));
         const lab = (q.hpIn ? (q.hpIn === 'h' ? 'H' : 'P') : '') || techMark(x, q.f);
         if (lab) { g.fillStyle = q.hpIn ? '#d9b3ff' : '#ffd9bd'; g.font = `700 ${Math.round(10 * s + 4)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'bottom'; g.fillText(lab, xAt(xc, z), y - gh / 2 - 2); }
@@ -190,19 +181,18 @@ export class RoadView {
         }
       }
       // h/p: дуга от предыдущей ноты
-      if (q.hpIn && !passed && s > 0.3) { /* дуга рисуется у предыдущей ноты */ }
-      if (x.hp && q.next != null && notes[q.next] && !passed) {
+      if (x.hp && q.next != null && notes[q.next]) {
         const q2 = notes[q.next], z2 = zOf(q2.s); if (z2 <= 1) { const p2 = P(q2.f, q2.st, z2); g.strokeStyle = '#c77dff'; g.lineWidth = 2 * s; g.beginPath(); g.moveTo(xAt(xc, z), y - gh / 2); g.quadraticCurveTo((xAt(xc, z) + p2.x) / 2, Math.min(y, p2.y) - gh * 1.4, p2.x, p2.y - gemH(z2) / 2); g.stroke(); }
       }
     }
     // рамки аккордов
     for (const arr of groups.values()) {
       if (arr.length < 2) continue;
-      const q0 = arr[0].q; if (arr.every(a => a.passed) && !(q0.s <= t && q0.e > t)) continue;
+      const q0 = arr[0].q;
       const z = Math.min(...arr.map(a => a.z)), s = scl(z);
       const x0 = Math.min(...arr.map(a => a.x - a.gw / 2)), x1 = Math.max(...arr.map(a => a.x + a.gw / 2));
       const y0 = Math.min(...arr.map(a => a.y - a.gh / 2)), y1 = Math.max(...arr.map(a => a.y + a.gh / 2));
-      const isNext = nextS != null && Math.abs(q0.s - nextS) < 0.03;
+      const isNext = nextS != null && q0.s === nextS;
       g.strokeStyle = isNext ? '#fff' : q0.rep ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.75)'; g.lineWidth = q0.rep ? 2 : 1.5;
       rr(g, x0 - 4 * s, y0 - 4 * s, x1 - x0 + 8 * s, y1 - y0 + 8 * s, 6); g.stroke();
       if (q0.rep) { g.fillStyle = 'rgba(255,255,255,.06)'; g.fill(); for (const a of arr) { g.fillStyle = STRING_COLORS[a.q.st % STRING_COLORS.length]; g.fillRect(x0 - 4 * s, a.y - 1, 6 * s, 2); g.fillRect(x1 - 2 * s, a.y - 1, 6 * s, 2); } }
@@ -229,7 +219,7 @@ export class RoadView {
     // следующий удар: кольца сжимаются к месту на грифе
     if (nextS != null && nextS - t < 1.2) {
       const k = clamp((nextS - t) / 1.2, 0, 1);
-      for (const q of vis) if (Math.abs(q.s - nextS) < 0.03) {
+      for (const q of vis) if (q.s === nextS) {
         const col = STRING_COLORS[q.st % STRING_COLORS.length], y = strY(q.st);
         g.globalAlpha = 0.35 + 0.65 * (1 - k);
         if (q.f === 0) { g.strokeStyle = col; g.lineWidth = 2; g.strokeRect(nearL, y - 5 - k * 6, nearR - nearL, 10 + k * 12); }
@@ -246,7 +236,7 @@ export class RoadView {
       if (Math.abs(semi) > 0.05) { g.strokeStyle = col; g.lineWidth = 2; g.beginPath(); g.moveTo(bx - R * 1.5, y0); g.quadraticCurveTo(bx, y, bx + R * 1.5, y0); g.stroke(); }
       if (x.harm) { g.strokeStyle = '#4dd0e1'; g.lineWidth = 3; g.beginPath(); g.moveTo(bx, y - R - 3); g.lineTo(bx + R + 3, y); g.lineTo(bx, y + R + 3); g.lineTo(bx - R - 3, y); g.closePath(); g.stroke(); }
       g.fillStyle = x.pm ? shade(col, -0.45) : col; g.beginPath(); g.arc(bx, y, R, 0, 7); g.fill();
-      if (dur > Math.max(0.42, med * 1.4)) { g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.beginPath(); g.arc(bx, y, R + 4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - clamp(fr, 0, 1))); g.stroke(); }
+      if (dur > 0.5) { g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.beginPath(); g.arc(bx, y, R + 4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - clamp(fr, 0, 1))); g.stroke(); }
       g.fillStyle = x.pm ? '#fff' : '#000'; g.font = '700 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(x.dead ? 'x' : Math.round(ff), bx, y + 0.5);
       if (x.bend && semi > 0.2) { g.fillStyle = '#ff8a3d'; g.font = '700 11px system-ui'; g.textBaseline = 'bottom'; g.fillText('↑' + bendText(semi).trim(), bx, y - R - 5); }
       const age = t - q.s; if (age < 0.2) { g.strokeStyle = col; g.globalAlpha = 1 - age / 0.2; g.lineWidth = 3; g.beginPath(); g.arc(bx, nearY, 10 + age * 120, Math.PI, 0); g.stroke(); g.globalAlpha = 1; }

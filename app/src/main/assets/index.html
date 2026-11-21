@@ -181,8 +181,18 @@
 <div id="speedSheet" class="sheet">
   <form id="speedForm" class="sheet-body">
     <div class="sheet-head"><label for="speedPercent">Скорость воспроизведения, %</label><button type="button" class="icon" data-close aria-label="Закрыть">✕</button></div>
-    <div class="row gap"><input id="speedPercent" type="number" inputmode="numeric" min="25" max="150" step="1" required><button class="primary">Применить</button></div>
-    <p class="muted small">От 25 до 150%. 100% — исходный темп.</p>
+    <div class="speed-control">
+      <output id="speedValue" for="speedPercent">100%</output>
+      <input id="speedPercent" type="range" min="25" max="150" step="1" value="100">
+      <div class="speed-scale"><span>25%</span><button id="speedReset" type="button" class="chip">100%</button><span>150%</span></div>
+    </div>
+    <div class="speed-control" id="roadSpeedControl" hidden>
+      <label for="roadPreview">Предпросмотр на «Дороге»</label>
+      <output id="roadPreviewValue" for="roadPreview">2,2 с</output>
+      <input id="roadPreview" type="range" min="1.2" max="4" step="0.1" value="2.2">
+      <div class="speed-scale muted small"><span>Ближе</span><span>Дальше</span></div>
+    </div>
+    <button class="primary wide">Применить</button>
   </form>
 </div>
 <div id="sheet" class="sheet">

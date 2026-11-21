@@ -5,7 +5,7 @@ import TEMPLATES from './templates.js';
 
 const GW = 8, GH = 11;
 // Версия разбора: при её смене сохранённые PDF Songsterr разбираются заново (2 — паузы, глухие ноты, штили ударных)
-export const PARSER_VERSION = 7; // 7 — фильтрация подписей в строках текста
+export const PARSER_VERSION = 8; // 8 — отброс подписей вокалистов и строк соседней системы
 
 function mul(m, n) {
   return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
@@ -178,12 +178,23 @@ export function standardTuning(n, isBass) {
   return T[n] || T[6];
 }
 
-function isLyricRow(row) {
-  // PDF может хранить каждую букву отдельным глифом с пробелами между ними.
-  const line = row.map(ch => ch.c).join('').toLowerCase().replace(/[\s_]+/gu, '');
-  if (/[©®]|songsterr|copyright|allrightsreserved|propertyof|всеправазащищены|являетсясобственностью/.test(line)) return false;
-  const label = line.replace(/[\[\](){}.:#–—-]/g, '');
-  return !/^(?:\d+)?(?:припев|предприпев|куплет|вступление|проигрыш|бридж|соло|кода|intro|outro|prechorus|chorus|verse|bridge|instrumental|solo|interlude|refrain)(?:\d+|[ivx]+)?$/.test(label);
+const lyricKey = s => s.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+export function lyricLabels(names) {
+  const labels = new Set(['tarja', 'tarjaturunen']);
+  for (const name of names) {
+    if (typeof name !== 'string' || !/vocal|voice|singer|вокал|голос/i.test(name)) continue;
+    const person = name.split(/[|—]/)[0].replace(/lead |backing |clean |harsh |main /gi, '')
+      .replace(/vocals?|voices?|singers?|вокал|голос/gi, '').replace(/[()]/g, '').trim();
+    if (person) labels.add(lyricKey(person));
+  }
+  return labels;
+}
+export function isLyricText(text, labels, row = true) {
+  const key = lyricKey(text);
+  if (!key || labels.has(key)) return false;
+  if (/[©®]|songsterr|copyright|allrightsreserved|propertyof|всеправазащищены|являетсясобственностью/.test(text.toLowerCase().replace(/\s+/g, ''))) return false;
+  if (/^(?:\d+)?(?:припев|предприпев|куплет|вступление|проигрыш|бридж|соло|кода|intro|outro|prechorus|chorus|verse|bridge|instrumental|solo|interlude|refrain)(?:\d+|[ivx]+)?$/.test(key)) return false;
+  return !row || !/^(?:lead|backing|clean|harsh)?(?:vocals?|вокал|голос)(?:\d+)?$/.test(key);
 }
 
 function cluster(vals, tol) {
@@ -306,7 +317,7 @@ function tempoUnit(out, x, y) {
   if (dot) u *= 1.5;
   return u;
 }
-async function parsePage(page, O, pageNo) {
+async function parsePage(page, O, pageNo, labels) {
   const out = await walkPage(page, O);
   const tc = await page.getTextContent();
   const H = page.view[3];
@@ -314,6 +325,7 @@ async function parsePage(page, O, pageNo) {
     s: it.str.trim(), x: it.transform[4], y: H - it.transform[5], h: it.height || Math.abs(it.transform[3]), w: it.width || 0, raw: it.str, f: it.fontName
   }));
 
+  const pageLabels = new Set([...labels, ...lyricLabels(texts.filter(t => t.y < 90).map(t => t.s.replace(/^Track:\s*/i, '')))]);
   // Горизонтальные линии (струны) и вертикальные (тактовые черты, штили)
   const hl = [], vl = [];
   for (const o of out) for (const s of o.subs) {
@@ -352,7 +364,7 @@ async function parsePage(page, O, pageNo) {
 
   const glyphs = extractGlyphs(out);
   const res = [];
-  for (const sg of staves) {
+  for (const [staffIndex, sg] of staves.entries()) {
     const ys = sg.map(l => l.y), top = ys[0], bot = ys[ys.length - 1], sp = ys[1] - ys[0];
     const sx0 = Math.min(...sg.map(l => l.x0)), sx1 = Math.max(...sg.map(l => l.x1));
     // Тактовые черты
@@ -581,7 +593,7 @@ async function parsePage(page, O, pageNo) {
     // Слова песни: строка под ритмом (буквы ~10 pt), разбиваем на слоги по промежуткам
     const lyr = [];
     {
-      const band = (out.chars || []).filter(ch => ch.y > bot + 14 && ch.y < bot + 80 && ch.h > 8 && ch.h < 13);
+      const band = (out.chars || []).filter(ch => ch.y > bot + 14 && ch.y < Math.min(bot + 80, (staves[staffIndex + 1]?.[0]?.y ?? Infinity) - 22) && ch.h > 8 && ch.h < 13);
       const rowsY = cluster(band.map(ch => ch.y), 2);
       const rows = rowsY.map(() => []);
       for (const ch of band) {
@@ -589,7 +601,7 @@ async function parsePage(page, O, pageNo) {
         rows[idx].push(ch);
       }
       const candidates = rows.map(r => r.sort((a, b) => a.x - b.x))
-        .filter(isLyricRow)
+        .filter(r => isLyricText(r.map(ch => ch.c).join(''), pageLabels))
         .map(r => r.filter(ch => ch.x > sx0 - 5 && ch.x < sx1 + 5))
         .filter(r => r.some(ch => /[A-Za-zА-Яа-яЁё]/.test(ch.c)));
       const row = candidates.reduce((best, r) => r.length > best.length ? r : best, []);
@@ -634,7 +646,7 @@ export async function parseSongsterrPdf(pdfjsLib, data, onProgress) {
   const systems = []; let title = '', track = '', instrument = '';
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
-    const r = await parsePage(page, O, p);
+    const r = await parsePage(page, O, p, lyricLabels([track, track + ' ' + instrument]));
     if (p === 1) {
       const head = r.texts.filter(t => t.y < 90);
       const big = head.filter(t => t.h > 14);
@@ -950,7 +962,9 @@ export function buildSong(systems, meta) {
     }
     lyrics.push({ start: +t.toFixed(4), s: w.s });
   }
-  lyrics.sort((a, b) => a.start - b.start);
+  const labels = lyricLabels([meta.track, meta.track + ' ' + meta.instrument]);
+  const cleanLyrics = lyrics.filter(w => isLyricText(w.s, labels, false));
+  cleanLyrics.sort((a, b) => a.start - b.start);
   // ударные: головки в положении, которому нет элемента установки, не озвучиваем — показываем для проверки
   const unknown = isDrum ? outNotes.filter(n => n.midi == null).map(n => ({ start: +n.start.toFixed(4), measure: n.measure, page: n.sy.page, head: n.src.head, step: n.src.step, box: [n.src.b.x0, n.src.b.y0, n.src.b.x1, n.src.b.y1].map(v => +v.toFixed(1)) })) : [];
   const clean = outNotes.filter(n => n.midi != null).map(n => ({ midi: n.midi, start: +n.start.toFixed(4), dur: +n.dur.toFixed(4), string: n.string, fret: n.fret, measure: n.measure, voice: n.gray ? 1 : 0,
@@ -960,6 +974,6 @@ export function buildSong(systems, meta) {
     pv: PARSER_VERSION, title: meta.title || 'Без названия', track: meta.track, instrument: meta.instrument,
     tuning: isDrum ? null : tuning, tuningNames: isDrum ? null : tuningNames, strings: nStr, isBass, isDrum,
     measures: ms.filter(m => !m.cont).map(m => ({ n: m.n, start: m.start, len: m.fullLen || m.len, tempo: m.tempo, sig: m.sig, ...(m.tempoPts ? { tempoPts: m.tempoPts } : {}), ...(m.marker ? { marker: m.marker } : {}), ...(m.squeezed || m.short || m.restMismatch ? { rhythmCheck: true } : {}) })),
-    totalBeats: total, notes: clean, unknown, ...(lyrics.length ? { lyrics } : {})
+    totalBeats: total, notes: clean, unknown, ...(cleanLyrics.length ? { lyrics: cleanLyrics } : {})
   };
 }

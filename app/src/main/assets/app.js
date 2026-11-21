@@ -1,6 +1,6 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
 import * as alphaTab from './lib/alphatab/alphaTab.min.mjs';
-import { parseSongsterrPdf, PARSER_VERSION } from './parser.js';
+import { parseSongsterrPdf, PARSER_VERSION, lyricLabels, isLyricText } from './parser.js';
 import { recognizePdf } from './omr.js';
 import { importMidi } from './import-midi.js';
 import { importScore } from './import-gp.js';
@@ -517,7 +517,7 @@ function frame() {
     P.hot = [];
     const ctx = { t, tick, hot: P.hints ? P.hot : null, speed: P.speed, names: P.names, mStarts: P.time.mStarts, measures: P.song.measures, measureIdx: mi, firstIdx, loop: P.loop ? { a: P.time.toSec(P.loop.ta), b: P.time.toSec(P.loop.tb) } : null, sections: P.sections };
     if (P.mode === 'keys') piano.draw(g, W, H, { ...ctx, notes: P.keysNotes, land: P.land, pressed: P.pressed, pedal: P.pedal, fingers: P.train && P.train.fing, want: train && train.waiting ? train.waiting.need : null, mineOnly: P.train && P.train.who !== 'none' && P.train.who !== 'fret' ? P.train.who : null });
-    else if (P.mode === 'road') road.draw(g, W, H, { ...ctx, notes: P.fretNotes, land: P.land, chordFor: s0 => { const c = (P.fretChords || []).find(c => Math.abs(c.s - s0) < 0.05); return c ? c.name : null; } });
+    else if (P.mode === 'road') road.draw(g, W, H, { ...ctx, preview: roadPreview, notes: P.fretNotes, land: P.land, chordFor: s0 => { const c = (P.fretChords || []).find(c => Math.abs(c.s - s0) < 0.05); return c ? c.name : null; } });
     else if (P.mode === 'drums') drumsView.draw(g, W, H, { ...ctx, notes: P.drumNotes, pressed: P.pressedPads, land: P.land });
     else { const tr = P.song.tracks[P.gTrack]; guitar.draw(g, W, H, { ...ctx, notes: P.fretNotes, tuningNames: tuningLabels(tr), tuningTitle: tr && tr.tuning ? describeTuning(P.fretTuning || tr.tuning, tr.kind).name + (P.retune && P.retune[P.gTrack] ? ' (перестроено)' : '') : '', bends: P.gBends, land: P.land, chord: currentChord(t), want: train && train.waiting ? train.waiting.need : null }); }
   } else if (P.mode === 'score') {
@@ -554,7 +554,8 @@ function tuningLabels(tr) {
 // ---------- Слова песни ----------
 // строки: новая строка, если пауза между словами больше ~1,6 с или в строке уже много слов
 function buildLyr() {
-  const L = P.song.lyrics || [];
+  const labels = lyricLabels(P.song.tracks.map(tr => tr.name));
+  const L = (P.song.lyrics || []).filter(w => isLyricText(w.s, labels, false));
   const words = L.map(w => ({ s: w.s, t: P.time.toSec(w.t) })).sort((a, b) => a.t - b.t);
   const lines = []; let cur = null;
   words.forEach((w, i) => {
@@ -572,8 +573,9 @@ function lyrHtml(li, wi) {
   const { words, lines } = P.lyr, ln = lines[li]; if (!ln) return '';
   let h = '';
   for (let i = ln.a; i <= ln.b; i++) {
-    const w = words[i], txt = w.s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    h += `<span class="${i < wi ? 'sung' : i === wi ? 'now' : ''}">${txt}</span>${w.s.endsWith('-') ? '' : ' '}`;
+    const w = words[i], continued = w.s.endsWith('-') && i < ln.b;
+    const txt = (continued ? w.s.slice(0, -1) : w.s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    h += `<span class="${i < wi ? 'sung' : i === wi ? 'now' : ''}">${txt}</span>${continued ? '' : ' '}`;
   }
   return h;
 }
@@ -674,19 +676,31 @@ $('seek').onchange = () => { seeking = false; engine.seekTick(P.time.toTick($('s
 function gotoMeasure(i) { i = Math.max(0, Math.min(P.song.measures.length - 1, i)); engine.seekTick(P.song.measures[i].tick); }
 $('prevBtn').onclick = () => { const t = P.time.toSec(engine.nowTick()), mi = P.time.measureAtSec(t); if (t - P.time.mStarts[mi] > 0.4) gotoMeasure(mi); else gotoMeasure(mi - 1); };
 $('nextBtn').onclick = () => gotoMeasure(P.time.measureAtSec(P.time.toSec(engine.nowTick())) + 1);
+let roadPreview = ls.get('nv-road-preview', 2.2);
+const speedRange = $('speedPercent'), roadRange = $('roadPreview');
+function showSliderValue(slider, output, label) {
+  output.textContent = label;
+  const fill = (slider.valueAsNumber - Number(slider.min)) / (Number(slider.max) - Number(slider.min));
+  slider.style.setProperty('--fill', (fill * 100) + '%');
+  slider.setAttribute('aria-valuetext', label);
+}
+speedRange.oninput = () => showSliderValue(speedRange, $('speedValue'), speedRange.value + '%');
+roadRange.oninput = () => showSliderValue(roadRange, $('roadPreviewValue'), roadRange.value.replace('.', ',') + ' с');
+$('speedReset').onclick = () => { speedRange.value = 100; speedRange.oninput(); };
 function openSpeed() {
-  const input = $('speedPercent');
-  input.value = Math.round(P.speed * 100);
+  speedRange.value = Math.round(P.speed * 100);
+  roadRange.value = roadPreview;
+  $('roadSpeedControl').hidden = P.mode !== 'road';
+  speedRange.oninput();
+  roadRange.oninput();
   $('speedSheet').classList.add('on');
-  input.focus(); input.select();
 }
 $('speedBtn').onclick = $('exactSpeed').onclick = openSpeed;
 $('speedForm').onsubmit = e => {
   e.preventDefault();
-  const input = $('speedPercent');
-  if (!input.reportValidity()) return;
-  setSpeed(input.valueAsNumber / 100);
-  input.blur();
+  roadPreview = roadRange.valueAsNumber;
+  ls.set('nv-road-preview', roadPreview);
+  setSpeed(speedRange.valueAsNumber / 100);
   $('speedSheet').classList.remove('on');
 };
 function setSpeed(s) { P.speed = s; engine.setSpeed(s); updateUi(); fillSeg(); }
