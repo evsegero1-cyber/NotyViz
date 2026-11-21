@@ -5,7 +5,7 @@ import TEMPLATES from './templates.js';
 
 const GW = 8, GH = 11;
 // Версия разбора: при её смене сохранённые PDF Songsterr разбираются заново (2 — паузы, глухие ноты, штили ударных)
-export const PARSER_VERSION = 5; // 5 — темп: accel./rit., единица темпа, отметки выше подписей // 3 — форшлаги, бенды, части; 4 — слова песни
+export const PARSER_VERSION = 6; // 6 — гитара в низких строях не путается с басом; // 5 — темп: accel./rit., единица темпа, отметки выше подписей // 3 — форшлаги, бенды, части; 4 — слова песни
 
 function mul(m, n) {
   return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
@@ -679,7 +679,13 @@ export function buildSong(systems, meta) {
   const letters = (systems.find(s => s.tun.length === nStr) || {}).tun;
   // Бас: по названию, либо 4–6 струн с верхней струной соль/до (у гитары верхняя — ми/ре)
   const topL = letters && letters[0] ? letters[0][0].toUpperCase() : '';
-  const isBass = !isDrum && (/bass|бас/i.test(meta.track + ' ' + meta.instrument) || (nStr <= 6 && (topL === 'G' || (topL === 'C' && nStr >= 5))));
+  // Бас или гитара. У баса все соседние струны — через кварту (5 полутонов), у гитары между 2-й и 3-й
+  // струной большая терция (4 полутона). Поэтому гитара в строе Standard C (C F A# D# G C) — не бас,
+  // хотя верхняя струна у неё тоже «C», как у 6-струнного баса (B E A D G C).
+  const pcsL = letters ? letters.map(letterPc) : null;
+  const allFourths = !!pcsL && pcsL.length >= 4 && pcsL.every(p => p != null) && pcsL.slice(1).every((p, i) => ((pcsL[i] - p) % 12 + 12) % 12 === 5);
+  const byName = /bass|бас/i.test(meta.track + ' ' + meta.instrument), guitarName = /guitar|гитар|strat|les paul|gibson|ibanez rg|esp|jackson|schecter|prs/i.test(meta.track + ' ' + meta.instrument) && !byName;
+  const isBass = !isDrum && !guitarName && (byName || (pcsL ? allFourths && nStr <= 6 && (topL === 'G' || topL === 'C') : nStr <= 4));
   const tuning = (letters && inferTuning(letters, isBass)) || standardTuning(nStr, isBass);
   const tuningNames = letters && letters.length === nStr ? letters : null;
 
